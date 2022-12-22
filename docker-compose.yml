@@ -30,7 +30,7 @@ services:
           - tercen
     image: tercen/tercen:0.9.21
     ports:
-      - 5402:5400
+      - 5400:5400
     volumes:
       - /var/lib/tercen/external:/var/lib/tercen/external
       - ./config:/etc/tercen
