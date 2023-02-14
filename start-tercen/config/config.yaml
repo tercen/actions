@@ -12,6 +12,8 @@ tercen.couchdb.address: couchdb
 tercen.couchdb.user: admin
 tercen.couchdb.password: admin
 
+run.sarno.table.migration: 'true'
+
 tercen.client.uri: http://172.42.0.42:5400
 tercen.worker.ip: 172.42.0.42
 tercen.worker.runtime.ip: runtime-docker
