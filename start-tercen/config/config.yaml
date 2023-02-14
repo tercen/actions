@@ -7,12 +7,13 @@ configs:
     config:
       tercen.auth.cookie.domain: 127.0.0.1
 # ALL 0 # OFF 2000 # FINEST 300 # FINER 400 # FINE 500 # CONFIG 700 # INFO 800 # WARNING 900 # SEVERE 1000 # SHOUT 1200
-tercen.log.level: '0'
+tercen.log.level: '2000'
 tercen.couchdb.address: couchdb
 tercen.couchdb.user: admin
 tercen.couchdb.password: admin
 
-run.sarno.table.migration: 'true'
+# upgrade from 0.9.0 to 0.10.0
+#run.sarno.table.migration: 'true'
 
 tercen.client.uri: http://172.42.0.42:5400
 tercen.worker.ip: 172.42.0.42
