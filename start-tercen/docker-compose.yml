@@ -40,7 +40,8 @@ services:
       - tmp:/tmp
     environment:
       - TERCEN_CLIENT_URI=http://127.0.0.1:5402
-    command: ["/wait-for-it.sh", "127.0.0.1:5402", "--", "echo", "OK"]
+    #command: ["/wait-for-it.sh", "127.0.0.1:5402", "--", "echo", "OK"]
+    command: ["/wait.sh", "127.0.0.1", "5402"]
     restart: always
 
   sarno:
