@@ -5,6 +5,6 @@ description: Start a local instance of tercen to run tests
 runs:
   using: "composite"
   steps: 
-    - run: docker-compose -f "${{ github.action_path }}/docker-compose.yml" up -d
+    - run: cd ${{ github.action_path }} && docker-compose -f "docker-compose.yml" up -d
       shell: bash
 
