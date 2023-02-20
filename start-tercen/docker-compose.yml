@@ -34,7 +34,7 @@ services:
     volumes:
       - /var/lib/tercen/external:/var/lib/tercen/external
       - tercen-data:/var/lib/tercen/data
-      - ./config/tercen:/etc/tercen
+      - ./start-tercen/config/tercen:/etc/tercen
       - var-run:/var/run
       - tercen-run:/var/lib/tercen/run
       - tmp:/tmp
