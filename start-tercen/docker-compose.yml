@@ -30,7 +30,7 @@ services:
           - tercen
     image: tercen/tercen:stage
     ports:
-      - 5402:5400
+      - 5400:5400
     volumes:
       - /var/lib/tercen/external:/var/lib/tercen/external
       - tercen-data:/var/lib/tercen/data
@@ -39,9 +39,8 @@ services:
       - tercen-run:/var/lib/tercen/run
       - tmp:/tmp
     environment:
-      - TERCEN_CLIENT_URI=http://127.0.0.1:5402
-    #command: ["/wait-for-it.sh", "127.0.0.1:5402", "--", "echo", "OK"]
-    command: bash -c "/wait.sh 127.0.0.1 5402"
+      - TERCEN_CLIENT_URI=http://127.0.0.1:5400
+    command: ["/wait-for-it.sh", "127.0.0.1:5400", "--", "echo", "OK"]
     restart: always
 
   sarno:
