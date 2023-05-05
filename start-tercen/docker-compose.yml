@@ -44,6 +44,10 @@ services:
     restart: always
 
   sarno:
+    networks:
+      tercen:
+        aliases:
+          - sarno
     image: tercen/sarno:stage
     volumes:
       - tercen-data:/var/lib/tercen/data
