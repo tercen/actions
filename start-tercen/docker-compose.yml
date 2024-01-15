@@ -57,7 +57,7 @@ services:
 
   runtime-docker:
     privileged: true
-    image: docker:20.10.9-dind-alpine3.14
+    image: docker:24.0.6-dind-alpine3.18
     networks:
       tercen:
         aliases:
