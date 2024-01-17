@@ -11,7 +11,7 @@ configs:
         signup: 'true'
         show.worker.admin: 'true'
 # ALL 0 # OFF 2000 # FINEST 300 # FINER 400 # FINE 500 # CONFIG 700 # INFO 800 # WARNING 900 # SEVERE 1000 # SHOUT 1200
-tercen.log.level: '2000'
+tercen.log.level: '500'
 tercen.couchdb.address: couchdb
 tercen.couchdb.user: admin
 tercen.couchdb.password: admin
