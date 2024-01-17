@@ -31,7 +31,7 @@ inputs:
     description: 'Tercen user'
     required: true
     default: ''
-  tercen-pass:  
+  tercen-password:  
     description: 'Tercen password'
     required: true
     default: ''
