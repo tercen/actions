@@ -19,11 +19,11 @@ inputs:
     description: 'Github access token'
     required: true
     default: ''
-  docker-user:  
+  docker-username:  
     description: 'Docker username'
     required: true
     default: ''
-  docker-pass:  
+  docker-password:  
     description: 'Docker password'
     required: true
     default: ''
@@ -45,7 +45,7 @@ runs:
   steps:
     - name: docker login
       run: |
-        docker login --username ${{ inputs.docker-user }} --password ${{ inputs.docker-pass }}
+        docker login --username ${{ inputs.docker-username }} --password ${{ inputs.docker-password }}
       shell: bash
       working-directory: ${{ github.action_path }}
     - name: Install Template Runner
