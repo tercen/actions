@@ -57,7 +57,7 @@ runs:
       working-directory: ${{ github.action_path }}
     - name: 'Create Tercen Logs'
       if: always()  
-      run: docker logs tercen_studio_tercen_1 > tercen_logs.log
+      run: docker logs  start-tercen_tercen_1 > tercen_logs.log
       shell: bash
       working-directory: ${{ github.action_path }}
     - name: 'Upload Runner Results'
