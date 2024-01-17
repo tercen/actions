@@ -36,11 +36,7 @@ services:
       - tercen-data:/var/lib/tercen/data
       - ./config/tercen:/etc/tercen
       - var-run:/var/run
-      - tercen-run:/var/lib/tercen/run
       - tmp:/tmp
-    environment:
-      - TERCEN_CLIENT_URI=http://127.0.0.1:5400
-    command: ["/wait-for-it.sh", "127.0.0.1:5400", "--", "echo", "OK"]
     restart: always
 
   sarno:
@@ -51,7 +47,6 @@ services:
     image: tercen/sarno:stage
     volumes:
       - tercen-data:/var/lib/tercen/data
-      - tercen-run:/var/lib/tercen/run
       - tmp:/tmp
     restart: always
 
@@ -76,5 +71,4 @@ volumes:
   tercen-data:
   var-lib-docker:
   var-run:
-  tercen-run:
   tmp:
