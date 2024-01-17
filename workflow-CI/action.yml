@@ -55,13 +55,25 @@ runs:
       run: docker cp workflow_runner:/operator/test_results.json test_results.json
       shell: bash
       working-directory: ${{ github.action_path }}
-    - name: 'Upload Artifact'
+    - name: 'Create Tercen Logs'
+      if: always()  
+      run: docker logs docker logs tercen_studio_tercen_1 > tercen_logs.log
+      shell: bash
+      working-directory: ${{ github.action_path }}
+    - name: 'Upload Runner Results'
       if: always()
       uses: actions/upload-artifact@v3
       with:
         name: TestResults
         path: ${{ github.action_path }}/test_results.json
-        retention-days: 1
+        retention-days: 7
+    - name: 'Upload Tercen Logs'
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: TestResults
+        path: ${{ github.action_path }}/tercen_logs.json
+        retention-days: 7
 
       
   
