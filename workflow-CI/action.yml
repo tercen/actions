@@ -60,6 +60,16 @@ runs:
       run: docker logs  start-tercen_tercen_1 > tercen_logs.log
       shell: bash
       working-directory: ${{ github.action_path }}
+    - name: 'Read Runner Results'
+      id: json-content
+      run: |
+        echo "JSON=`cat ${{ github.action_path }}//test_results.json | tr -d '[:space:]'`" >> "$GITHUB_OUTPUT"
+      shell: bash
+      working-directory: ${{ github.action_path }}
+    - name: 'Check Runner Results'
+      if: ${{ steps.json-content.outputs.JSON != '{"Status":"Success"}' }}
+      run: exit 1
+      shell: bash
     - name: 'Upload Runner Results'
       if: always()
       uses: actions/upload-artifact@v3
