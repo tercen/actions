@@ -1,0 +1,70 @@
+name: Workflow CI
+
+description: Continuous integration test for workflow templates
+
+inputs:
+  git-repository:  
+    description: 'Github repository'
+    required: true
+    default: ''
+  branch:  
+    description: 'Github repository branch'
+    required: false
+    default: 'main'
+  tag:  
+    description: 'Github repository commit or version tag'
+    required: false
+    default: ''
+  git-token:  
+    description: 'Github access token'
+    required: true
+    default: ''
+  docker-user:  
+    description: 'Docker username'
+    required: true
+    default: ''
+  docker-pass:  
+    description: 'Docker password'
+    required: true
+    default: ''
+
+runs:
+  using: "composite"
+  steps:
+    - uses: tercen/actions/start-tercen@main
+    - name: docker login
+      run: |
+        docker login --username ${{ inputs.docker-user }} --password ${{ inputs.docker-pass }}
+      shell: bash
+      working-directory: ${{ github.action_path }}
+    - name: Install Template Runner
+      run: | 
+        docker pull tercen/workflow_runner:latest
+      shell: bash
+      working-directory: ${{ github.action_path }}
+    - name: Test template 
+      run: |
+        docker run  -t --name=workflow_runner --net=host tercen/workflow_runner:latest \
+          --templateRepo=${{ inputs.git-repository }} \
+          --report \
+          --gitToken=${{ inputs.git-token }}
+      shell: bash
+      working-directory: ${{ github.action_path }}
+    - name: 'Copy Result File'
+      if: always()  
+      run: docker cp workflow_runner:/operator/test_results.json test_results.json
+      shell: bash
+      working-directory: ${{ github.action_path }}
+    - name: 'Upload Artifact'
+      if: always()
+      uses: actions/upload-artifact@v3
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      with:
+        name: TestResults
+        path: test_results.json
+        retention-days: 1
+
+      
+  
+
