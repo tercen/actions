@@ -65,6 +65,8 @@ runs:
       working-directory: ${{ github.action_path }}
     - name: Create required package.json
       run: echo '{}' > package.json
+      shell: bash
+      working-directory: ${{ github.action_path }}
     - name: Build changelog
       id: Changelog
       uses: tercen/generate-changelog-action@master
