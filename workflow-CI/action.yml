@@ -58,11 +58,9 @@ runs:
     - name: 'Upload Artifact'
       if: always()
       uses: actions/upload-artifact@v3
-      shell: bash
-      working-directory: ${{ github.action_path }}
       with:
         name: TestResults
-        path: test_results.json
+        path: ${{ github.action_path }}/test_results.json
         retention-days: 1
 
       
