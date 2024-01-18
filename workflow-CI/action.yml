@@ -34,7 +34,7 @@ runs:
     - uses: tercen/actions/start-tercen@main
     - name: docker login
       run: |
-        docker login --username ${{ inputs.docker-username }} --password ${{ inputs.docker-password }}
+        echo ${{ inputs.docker-password }} | docker login --username ${{ inputs.docker-username }} --password-stdin  
       shell: bash
       working-directory: ${{ github.action_path }}
     - name: Install Template Runner
