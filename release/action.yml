@@ -1,6 +1,6 @@
 name: Release
-#TODO
-description: Continuous integration test for workflow templates
+
+description: Release a new operator version
 
 inputs:
   git-token:  
@@ -87,3 +87,21 @@ runs:
           -e TERCEN_URI=${{ inputs.tercen-uri }} \
           -e GITHUB_TOKEN=${{ inputs.git-token }} \
           tercen/tercenctl:release operator install --rm --tag ${GITHUB_SHA} --repo ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}
+    - name: Create required package.json
+      run: echo '{}' > package.json
+      shell: bash
+      working-directory: ${{ github.action_path }}
+    - name: Build changelog
+      id: Changelog
+      uses: tercen/generate-changelog-action@master
+    - name: Create release
+      id: create_release
+      uses: actions/create-release@latest
+      env:
+        GITHUB_TOKEN: ${{ inputs.git-token }} # This token is provided by Actions, you do not need to create your own token
+      with:
+        tag_name: ${{ github.ref }}
+        release_name: Release ${{ github.ref }}
+        body: ${{steps.Changelog.outputs.changelog}}
+        draft: false
+        prerelease: false
