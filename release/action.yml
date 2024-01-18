@@ -1,0 +1,89 @@
+name: Release
+#TODO
+description: Continuous integration test for workflow templates
+
+inputs:
+  git-token:  
+    description: 'Github access token'
+    required: true
+    default: ''
+  docker-username:  
+    description: 'Docker username'
+    required: true
+    default: ''
+  docker-password:  
+    description: 'Docker password'
+    required: true
+    default: ''
+  tercen-username:  
+    description: 'Tercen username'
+    required: true
+    default: ''
+  tercen-password:  
+    description: 'Tercen password'
+    required: true
+    default: ''
+  tercen-uri:  
+    description: 'Tercen operator service URI'
+    required: true
+    default: ''
+
+runs:
+  using: "composite"
+  steps:
+    # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+    - uses: actions/checkout@v2
+    - name: TERCEN_VERSION
+      shell: bash
+      run: |
+        echo "TERCEN_VERSION=${GITHUB_REF##*/}" >> $GITHUB_ENV
+    - name: SEMVER TERCEN_VERSION
+      shell: bash
+      run: |
+        SEMVER=( ${TERCEN_VERSION//./ } )
+        echo "TERCEN_MAJOR=${SEMVER[0]}" >> $GITHUB_ENV
+        echo "TERCEN_MINOR=${SEMVER[1]}" >> $GITHUB_ENV
+        echo "TERCEN_PATCH=${SEMVER[2]}" >> $GITHUB_ENV
+    - name: COMMIT_NUMBER
+      shell: bash
+      run: |
+        echo "COMMIT_NUMBER=${GITHUB_SHA::8}" >> $GITHUB_ENV
+    - name: docker login
+      shell: bash
+      run: docker login --username ${{ inputs.docker-username }} --password ${{ inputs.docker-password }}
+    - name: docker build
+      shell: bash
+      run: docker build -t ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY} .
+    - name: docker tag/push COMMIT_NUMBER
+      shell: bash
+      run: |
+        docker tag ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY} ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}:${COMMIT_NUMBER}
+        docker push ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}:${COMMIT_NUMBER}
+    - name: docker tag/push latest
+      shell: bash
+      run: |
+        docker tag ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY} ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}:latest
+        docker push ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}:latest
+      if: env.TERCEN_VERSION == 'main'
+    - name: docker minor tag version
+      shell: bash
+      run: |
+        docker tag p${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY} p${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}:${TERCEN_MAJOR}
+        docker push p${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}:${TERCEN_MAJOR}
+        docker tag p${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY} p${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}:${TERCEN_MAJOR}.${TERCEN_MINOR}
+        docker push p${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}:${TERCEN_MAJOR}.${TERCEN_MINOR}
+        docker tag p${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY} p${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}:${TERCEN_MAJOR}.${TERCEN_MINOR}.${TERCEN_PATCH}
+        docker push p${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}:${TERCEN_MAJOR}.${TERCEN_MINOR}.${TERCEN_PATCH}
+      if: env.TERCEN_PATCH != ''
+    - name: Pull tercenctl
+      run: docker pull tercen/tercenctl:release
+      shell: bash
+    - name: Install operator
+      shell: bash
+      run: |
+        docker run --rm \
+          -e TERCEN_USERNAME=${{ inputs.tercen-username }} \
+          -e TERCEN_PASSWORD=${{ inputs.tercen-password }} \
+          -e TERCEN_URI=${{ inputs.tercen-uri }} \
+          -e GITHUB_TOKEN=${{ inputs.git-token }} \
+          tercen/tercenctl:release operator install --rm --tag ${GITHUB_SHA} --repo ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}
