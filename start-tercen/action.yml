@@ -8,4 +8,8 @@ runs:
     - run: docker-compose -f "docker-compose.yml" up -d
       shell: bash
       working-directory: ${{ github.action_path }}
-
+    - run: |
+        chmod +x wait-for-it.sh
+        ./wait-for-it.sh 127.0.0.1:5400 -- echo wait-for-it-done
+      shell: bash
+      working-directory: ${{ github.action_path }}
