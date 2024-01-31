@@ -2,10 +2,16 @@ name: start-tercen
 
 description: Start a local instance of tercen to run tests
 
+inputs:
+  branch:  
+    description: 'Tercen image branch'
+    required: false
+    default: 'stage'
+
 runs:
   using: "composite"
   steps: 
-    - run: docker-compose -f "docker-compose.yml" up -d
+    - run: docker-compose -f "docker-compose.yml" up -d -e TERCEN_IMAGE_TAG=${{ inputs.branch }}
       shell: bash
       working-directory: ${{ github.action_path }}
 
