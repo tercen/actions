@@ -11,7 +11,9 @@ inputs:
 runs:
   using: "composite"
   steps: 
-    - run: docker-compose -f "docker-compose.yml" up -d -e TERCEN_IMAGE_TAG=${{ inputs.branch }}
+    - run: docker-compose -f "docker-compose.yml" up -d
       shell: bash
       working-directory: ${{ github.action_path }}
+      env:
+        TERCEN_IMAGE_TAG: ${{ inputs.branch }}
 
