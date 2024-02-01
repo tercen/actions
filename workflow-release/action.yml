@@ -1,6 +1,6 @@
 name: Workflow Release
 
-description: Continuous integration test for workflow templates
+description: Release a new template version
 
 inputs:
   git-repository:  
