@@ -2,6 +2,12 @@ name: start-tercen
 
 description: Start a local instance of tercen to run tests
 
+inputs:
+  branch:  
+    description: 'Tercen image branch'
+    required: false
+    default: 'stage'
+
 runs:
   using: "composite"
   steps: 
