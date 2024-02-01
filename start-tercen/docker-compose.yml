@@ -28,7 +28,9 @@ services:
         ipv4_address: 172.42.0.42
         aliases:
           - tercen
-    image: tercen/tercen:stage
+    image: tercen/tercen:${TERCEN_IMAGE_TAG}
+    environment:
+      - TERCEN_IMAGE_TAG=stage
     ports:
       - 5400:5400
     volumes:
