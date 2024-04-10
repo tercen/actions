@@ -29,7 +29,15 @@ inputs:
     default: ''
   service-uri:  
     description: 'Service URI'
-    required: true
+    required: false
+    default: ''
+  tercen-user:  
+    description: 'Tercen username'
+    required: false
+    default: ''
+  tercen-pwd:  
+    description: 'Tercen password'
+    required: false
     default: ''
 
 runs:
@@ -51,6 +59,8 @@ runs:
         docker run  -t --name=workflow_runner --net=host tercen/workflow_runner:latest \
           --templateRepo=${{ inputs.git-repository }} \
           --report \
+          --user=${{ inputs.tercen-user }} \
+          --passw=${{ inputs.tercen-pwd }} \
           --serviceUri=${{ inputs.service-uri }} \
           --gitToken=${{ inputs.git-token }}
       shell: bash
