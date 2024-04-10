@@ -57,6 +57,7 @@ runs:
       run: |
         docker run  -t --name=workflow_runner --net=host tercen/workflow_runner:latest \
           --templateRepo=${{ inputs.git-repository }} \
+          --tag=${{ inputs.tag }} \
           --user=${{ inputs.tercen-username }} \
           --passw=${{ inputs.tercen-password }} \
           --serviceUri=${{ inputs.tercen-uri }} \
