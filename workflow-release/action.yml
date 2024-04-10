@@ -62,8 +62,8 @@ runs:
       env:
         GITHUB_TOKEN: ${{ inputs.git-token }} # This token is provided by Actions, you do not need to create your own token
       with:
-        tag_name: ${{ github.ref }}
-        release_name: Release ${{ github.ref }}
+        tag_name: ${{ inputs.tag }}
+        release_name: Release ${{ inputs.tag }}
         body: ${{steps.Changelog.outputs.changelog}}
         draft: false
         prerelease: false
