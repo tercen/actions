@@ -31,6 +31,7 @@ inputs:
 runs:
   using: "composite"
   steps:
+    - uses: tercen/actions/start-tercen@main
     - name: docker login
       run: |
         docker login --username ${{ inputs.docker-username }} --password ${{ inputs.docker-password }}
