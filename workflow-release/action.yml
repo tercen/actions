@@ -27,18 +27,6 @@ inputs:
     description: 'Docker password'
     required: true
     default: ''
-  tercen-username:  
-    description: 'Tercen user'
-    required: true
-    default: ''
-  tercen-password:  
-    description: 'Tercen password'
-    required: true
-    default: ''
-  tercen-uri:  
-    description: 'Tercen operator service URI'
-    required: true
-    default: ''
 
 runs:
   using: "composite"
