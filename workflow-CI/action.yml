@@ -56,7 +56,7 @@ runs:
       working-directory: ${{ github.action_path }}
     - name: Test template 
       run: |
-        docker run  -t --name=workflow_runner --net=host tercen/workflow_runner:latest \
+        docker run  -t --name=workflow_runner --net=host tercen/workflow_runner_operator:latest \
           --templateRepo=${{ inputs.git-repository }} \
           --report \
           --user=${{ inputs.tercen-username }} \
