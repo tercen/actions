@@ -14,7 +14,7 @@ runs:
     - name: Pull tercenctl
       run: docker pull tercen/tercenctl:release
       shell: bash
-    - run: docker-compose -f "docker-compose.yml" up -d
+    - run: docker compose -f "docker-compose.yml" up -d
       shell: bash
       working-directory: ${{ github.action_path }}
       env:
