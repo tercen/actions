@@ -7,4 +7,6 @@ mkdocs-material
 mkdocs-material-extensions
 mkdocs-minify-plugin
 mkdocs-redirects
+mkdocs-git-committers-plugin-2
+mkdocs-git-revision-date-localized-plugin
 pygit2
