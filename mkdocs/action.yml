@@ -11,7 +11,11 @@ inputs:
     description: 'doc version'
     required: false
     default: 'latest'
-  
+  committers_api_key:
+    description: 'github token for MKDOCS_GIT_COMMITTERS_APIKEY'
+    required: false
+    default: ''
+
 runs:
   using: "composite"
   steps:
@@ -37,5 +41,6 @@ runs:
     - name: Deploy with mike
       shell: bash
       run: |
+        export MKDOCS_GIT_COMMITTERS_APIKEY=${{ inputs.committers_api_key }}
         git fetch origin ${{ inputs.branch }} --depth=1
         mike deploy --push --branch ${{ inputs.branch }} ${{ inputs.tag }}
