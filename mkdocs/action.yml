@@ -43,4 +43,5 @@ runs:
       run: |
         export MKDOCS_GIT_COMMITTERS_APIKEY=${{ inputs.committers_api_key }}
         git fetch origin ${{ inputs.branch }} --depth=1
+        mike set-default --push latest
         mike deploy --push --branch ${{ inputs.branch }} ${{ inputs.tag }}
