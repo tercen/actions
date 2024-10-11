@@ -7,10 +7,14 @@ inputs:
     description: 'mkdocs branch'
     required: false
     default: 'gh-pages'
+  set_default:
+    description: 'set as default'
+    required: false
+    default: 'false'
   tag:  
     description: 'doc version'
     required: false
-    default: 'latest'
+    default: 'pre-release'
   committers_api_key:
     description: 'github token for MKDOCS_GIT_COMMITTERS_APIKEY'
     required: false
@@ -37,11 +41,16 @@ runs:
       run: |
         git config --local user.email "github-actions[bot]@users.noreply.github.com"
         git config --local user.name "github-actions[bot]"
-  
+
+    - name: mike set-default
+      shell: bash
+      run: |
+        mike set-default --allow-undefined ${{ inputs.tag }}
+      if: 'true' == ${{ inputs.set_default }}
+
     - name: Deploy with mike
       shell: bash
       run: |
         export MKDOCS_GIT_COMMITTERS_APIKEY=${{ inputs.committers_api_key }}
         git fetch origin ${{ inputs.branch }} --depth=1
-        mike set-default --push latest
         mike deploy --push --branch ${{ inputs.branch }} ${{ inputs.tag }}
