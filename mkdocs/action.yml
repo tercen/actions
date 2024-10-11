@@ -46,7 +46,7 @@ runs:
       shell: bash
       run: |
         mike set-default --allow-undefined ${{ inputs.tag }}
-      if: 'true' == ${{ inputs.set_default }}
+      if: 'true' == inputs.set_default
 
     - name: Deploy with mike
       shell: bash
