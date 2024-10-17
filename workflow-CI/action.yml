@@ -41,7 +41,7 @@ runs:
       with:
         registry: ghcr.io
         username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+        password: ${{ inputs.git-token }}
     - name: Install Template Runner
       run: | 
         docker pull tercen/workflow_runner_operator:latest
