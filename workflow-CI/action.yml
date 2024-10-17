@@ -19,14 +19,6 @@ inputs:
     description: 'Github access token'
     required: true
     default: ''
-  docker-username:  
-    description: 'Docker username'
-    required: true
-    default: ''
-  docker-password:  
-    description: 'Docker password'
-    required: true
-    default: ''
   service-uri:  
     description: 'Service URI'
     required: false
@@ -44,11 +36,12 @@ runs:
   using: "composite"
   steps:
     - uses: tercen/actions/start-tercen@main
-    - name: docker login
-      run: |
-        echo ${{ inputs.docker-password }} | docker login --username ${{ inputs.docker-username }} --password-stdin  
-      shell: bash
-      working-directory: ${{ github.action_path }}
+    - name: Log in to the Container registry
+      uses: docker/login-action@v3.3.0
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     - name: Install Template Runner
       run: | 
         docker pull tercen/workflow_runner_operator:latest
