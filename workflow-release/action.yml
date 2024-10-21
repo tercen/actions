@@ -19,14 +19,6 @@ inputs:
     description: 'Github access token'
     required: true
     default: ''
-  docker-username:  
-    description: 'Docker username'
-    required: true
-    default: ''
-  docker-password:  
-    description: 'Docker password'
-    required: true
-    default: ''
   service-uri:  
     description: 'Service URI'
     required: false
@@ -34,21 +26,22 @@ inputs:
   tercen-username:  
     description: 'Tercen username'
     required: false
-    default: 'test'
+    default: ''
   tercen-password:  
     description: 'Tercen password'
     required: false
-    default: 'test'
+    default: ''
 
 runs:
   using: "composite"
   steps:
     - uses: tercen/actions/start-tercen@main
-    - name: docker login
-      run: |
-        docker login --username ${{ inputs.docker-username }} --password ${{ inputs.docker-password }}
-      shell: bash
-      working-directory: ${{ github.action_path }}
+    - name: Log in to the Container registry
+      uses: docker/login-action@v3.3.0
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ inputs.git-token }}
     - name: Install Template Runner
       run: | 
         docker pull tercen/workflow_runner_operator:latest
@@ -58,14 +51,35 @@ runs:
       run: |
         docker run  -t --name=workflow_runner --net=host tercen/workflow_runner_operator:latest \
           --templateRepo=${{ inputs.git-repository }} \
-          --tag=${{ inputs.tag }} \
+          --report \
           --user=${{ inputs.tercen-username }} \
           --passw=${{ inputs.tercen-password }} \
           --serviceUri=${{ inputs.service-uri }} \
-          --report \
           --gitToken=${{ inputs.git-token }}
       shell: bash
       working-directory: ${{ github.action_path }}
+    - name: 'Copy Result File'
+      if: always()  
+      run: docker cp workflow_runner:/operator/test_results.json test_results.json
+      shell: bash
+      working-directory: ${{ github.action_path }}
+    - name: 'Read Runner Results'
+      id: json-content
+      run: |
+        echo "JSON=`cat ${{ github.action_path }}//test_results.json | tr -d '[:space:]'`" >> "$GITHUB_OUTPUT"
+      shell: bash
+      working-directory: ${{ github.action_path }}
+    - name: 'Check Runner Results'
+      if: ${{ steps.json-content.outputs.JSON != '{"Status":"Success"}' }}
+      run: exit 1
+      shell: bash
+    - name: 'Upload Runner Results'
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: TestResults
+        path: ${{ github.action_path }}/test_results.json
+        retention-days: 7      
     - name: Create required package.json
       run: echo '{}' > package.json
       shell: bash
