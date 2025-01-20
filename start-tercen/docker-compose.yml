@@ -46,7 +46,7 @@ services:
       tercen:
         aliases:
           - sarno
-    image: tercen/sarno:stage
+    image: tercen/sarno:dev
     command: sarno --mode worker
 
     volumes:
