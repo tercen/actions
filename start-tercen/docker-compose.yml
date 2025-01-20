@@ -47,8 +47,11 @@ services:
         aliases:
           - sarno
     image: tercen/sarno:stage
+    command: sarno --mode worker
+
     volumes:
       - tercen-data:/var/lib/tercen/data
+      - ./config/sarno/sarno.toml:/root/.config/sarno/sarno.toml
       - tmp:/tmp
     restart: always
 
