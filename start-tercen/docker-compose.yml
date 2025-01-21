@@ -44,7 +44,8 @@ services:
       tercen:
         aliases:
           - sarno
-    image: tercen/sarno:dev
+    image: tercen/sarno:stage
+    command: sarno --mode worker
     environment:
       - TERCEN_GRPC_HOST=tercen
     volumes:
