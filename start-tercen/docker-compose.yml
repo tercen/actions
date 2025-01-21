@@ -29,8 +29,6 @@ services:
         aliases:
           - tercen
     image: tercen/tercen:${TERCEN_IMAGE_TAG}
-    environment:
-      - TERCEN_IMAGE_TAG=stage
     ports:
       - 5400:5400
     volumes:
