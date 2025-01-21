@@ -47,7 +47,8 @@ services:
         aliases:
           - sarno
     image: tercen/sarno:stage
-    
+    environment:
+      - TERCEN_GRPC_HOST=tercen
     volumes:
       - tercen-data:/var/lib/tercen/data
       - tmp:/tmp
