@@ -53,6 +53,7 @@ runs:
           --templateRepo=${{ inputs.git-repository }} \
           --report \
           --user=${{ inputs.tercen-username }} \
+          --branch=${{ inputs.branch }}
           --passw=${{ inputs.tercen-password }} \
           --serviceUri=${{ inputs.service-uri }} \
           --gitToken=${{ inputs.git-token }}
