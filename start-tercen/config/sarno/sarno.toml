@@ -1,0 +1,8 @@
+table_dir = '/var/lib/tercen/data/sarno/'
+file_dir = '/var/lib/tercen/data/upload/'
+grpc_host = '172.17.0.1' # For vs code
+#grpc_host = 'tercen' # For docker compose
+grpc_port = '50051'
+grpc_username = 'admin'
+grpc_password = 'admin'
+

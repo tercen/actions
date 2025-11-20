@@ -46,11 +46,11 @@ services:
         aliases:
           - sarno
     image: tercen/sarno:${SARNO_IMAGE_TAG}
-    command: sarno --mode worker
     environment:
       - TERCEN_GRPC_HOST=tercen
     volumes:
       - tercen-data:/var/lib/tercen/data
+      - ./config/sarno/sarno.toml:/root/.config/sarno/sarno.toml
       - tmp:/tmp
     restart: always
 
