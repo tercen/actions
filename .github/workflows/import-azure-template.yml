@@ -4,7 +4,11 @@
 #     exactly what the UI wizard does; tercenctl >= 0.12.0)
 #   git pull (RESET_PULL GitProjectTask; GIT_PAT task meta is encrypted
 #     server-side) → DoneState → worker writes GIT_COMMIT back onto the
-#     project; tercenctl -w polls and prints '  Current commit: <sha>'.
+#     project. The generated ops layer is QUIET: --wait prints only
+#     '✓ Operation completed successfully' — NO commit line (run
+#     36200062082), so the write-back is proven by reading the project
+#     doc back via `query jq` and matching it against the worker's
+#     'Git clone done : revision -- <sha>' TaskLogEvent.
 #
 # IMAGE TAG LESSON (run 36198962698 + probe): tercen/tercenctl:release is a
 # STALE hand-pushed tag (~Nov 2025) — it has NO `git` and NO `project`
@@ -14,8 +18,14 @@
 #
 # The worker's Git wrapper embeds the token as URL userinfo `pat:<token>`
 # (sci_git.dart L15) — valid for Azure DevOps https clones (any username,
-# PAT as password). skipLfs: true in _cloneGit, so the repo's LFS TestData
-# never enters the picture.
+# PAT as password). The clone runs with GIT_LFS_SKIP_SMUDGE=1 but
+# GitProjectHelper then fetches the repo's LFS TestData explicitly
+# (~14 min for this repo; run 36200062082).
+# ⚠ sci#1682 (fix PR #1683, rides next train): until it ships, the worker
+# FINE-logs the clone URL WITH the pat:<token> userinfo — the Capture step
+# redacts every ://user:secret@ shape before bytes hit disk and FAILS the
+# run if a token-shaped userinfo survives (run 36200062082 uploaded a raw
+# token this way; artifact deleted, token flagged for rotation).
 #
 # TOKEN AVAILABILITY: AZ_SRT_TOKEN reaches this repo (the 36198962698 guard
 # passed). It FAILS CLOSED with a length-only print; the run cannot
@@ -105,27 +115,60 @@ jobs:
             --token "$AZ_TOKEN_VALUE" \
             --branch main --wait 2>&1 | tee git-pull.log
 
-      - name: Assert — DoneState + GIT_COMMIT written back
-        # tercenctl's -w poll prints '✓ Git pull completed successfully' on
-        # DoneState and re-reads the project to print '  Current commit:'
-        # from the GIT_COMMIT meta the worker wrote back. Fail closed on
-        # BOTH: DoneState alone doesn't prove the write-back.
-        shell: bash
-        run: |
-          grep -q "Git pull completed successfully" git-pull.log || {
-            echo "::error::git pull did not reach DoneState (tercenctl prints '✓ Git pull completed successfully')"; tail -10 git-pull.log; exit 1; }
-          commit_line="$(grep -m1 'Current commit:' git-pull.log || true)"
-          if [ -z "$commit_line" ]; then
-            echo "::error::no 'Current commit:' line — worker reached DoneState but GIT_COMMIT is not on the project (write-back missing)"; exit 1
-          fi
-          echo "import complete: $commit_line"
-
-      - name: Capture service logs (diagnostics for any failure surface)
+      - name: Capture service logs (redacted; runs before the assert needs worker.log)
+        # sci#1682: the worker FINE-logs the clone URL with pat:<token>
+        # userinfo. Redact ANY ://user:secret@ shape BEFORE bytes hit disk
+        # (keeps the username for debugging), then guard the RESULT: a
+        # surviving token-shaped userinfo fails the run — never upload it.
         if: always()
         run: |
-          docker compose -f start-tercen/docker-compose.yml logs --no-color tercen > tercen.log || true
-          docker compose -f start-tercen/docker-compose.yml logs --no-color tercen-worker > worker.log || true
+          docker compose -f start-tercen/docker-compose.yml logs --no-color tercen 2>/dev/null \
+            | sed -E 's#(://[^/@: ]+:)[^@/ ]+@#\1***@#g' > tercen.log || true
+          docker compose -f start-tercen/docker-compose.yml logs --no-color tercen-worker 2>/dev/null \
+            | sed -E 's#(://[^/@: ]+:)[^@/ ]+@#\1***@#g' > worker.log || true
+          if grep -nE '://(pat|x-access-token|oauth2|token):[^@/* ]+@' tercen.log worker.log; then
+            echo "::error::credential-shaped userinfo survived redaction — refusing to upload"; exit 1
+          fi
           wc -l tercen.log worker.log
+
+      - name: Assert — DoneState + GIT_COMMIT written back
+        # The generated ops layer is QUIET: --wait prints only
+        # '✓ Operation completed successfully' — no 'Current commit:' line
+        # (run 36200062082 burned on that stale assumption). Three legs,
+        # all fail-closed:
+        #   1. tercenctl saw the operation complete (git-pull.log)
+        #   2. the worker cloned: 'Git clone done : revision -- <sha>'
+        #      TaskLogEvent is in worker.log (FINEST, captured in run
+        #      36200062082)
+        #   3. GIT_COMMIT meta on the project == that exact sha — proven by
+        #      reading the project doc back (`query jq`), not by log lines;
+        #      this is the write-back the UI's clone wizard depends on.
+        shell: bash
+        run: |
+          grep -q "Operation completed successfully" git-pull.log || {
+            echo "::error::git pull did not report success (generated layer prints '✓ Operation completed successfully')"; tail -5 git-pull.log; exit 1; }
+          CLONE_SHA="$(grep -oE 'revision -- [0-9a-f]{40}' worker.log | head -1 | awk '{print $3}')"
+          if [ -z "$CLONE_SHA" ]; then
+            echo "::error::no 'Git clone done : revision -- <sha>' event in worker.log — clone never ran or log capture failed"; exit 1
+          fi
+          echo "clone revision: $CLONE_SHA"
+          docker run --net=host --rm \
+              -e TERCEN_USERNAME=test \
+              -e TERCEN_PASSWORD=test \
+              -e TERCEN_URI=http://172.42.0.42:5400 \
+              "tercen/tercenctl:$CTL_TAG" query jq \
+              -e '.projects[] | select(.id == "'"$PROJECT_ID"'") | {id, commit: ([.meta[] | select(.key == "GIT_COMMIT") | .value] | first)}' \
+              -f json -q > project-readback.log
+          cat project-readback.log
+          COMMIT_META="$(jq -r '(try .commit catch null) // (try .[0].commit catch null) // (try .results[0].commit catch null) // empty' project-readback.log 2>/dev/null || true)"
+          if [ -z "$COMMIT_META" ] || [ "$COMMIT_META" = "null" ]; then
+            echo "::error::GIT_COMMIT meta missing/empty on project $PROJECT_ID — worker reached done but the write-back is absent"; exit 1
+          fi
+          echo "project GIT_COMMIT: $COMMIT_META"
+          if [ "$COMMIT_META" != "$CLONE_SHA" ]; then
+            echo "::error::GIT_COMMIT ($COMMIT_META) != clone revision ($CLONE_SHA)"; exit 1
+          fi
+          echo "import complete: project pinned to the cloned revision"
 
       - name: Upload logs
         if: always()
@@ -136,5 +179,6 @@ jobs:
             project-create.log
             git-pull.log
             docker-stderr.log
+            project-readback.log
             tercen.log
             worker.log
