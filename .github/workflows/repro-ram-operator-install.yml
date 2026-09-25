@@ -1,18 +1,42 @@
 # Repro harness for the customer (Ram) operator-install failure:
 # a fresh local Tercen instance installing an operator whose renv bootstrap
-# fetches from prod cran.tercen.com.
+# fetches from prod cran.tercen.com + api.github.com.
 #
 # HISTORY: this harness was built to reproduce Ram's operator-install
 # failure (`create.operator.renv.failed`). RED side is on record: prod
 # cran.tercen.com rlib routes used to 500 on ANY Authorization header
 # (JWTError; sci#1665), and bootstrapRenv injects `tercen.github.token`
 # as GITHUB_PAT into the restore container (sci_api_service
-# git_operator.dart), so a dummy token made every renv fetch fail.
+# git_operator.dart), so a bad token made every renv fetch fail. Fixed
+# live in 1.1.10 (authed PACKAGES 200 on prod).
 #
-# CURRENT JOB = GREEN PROOF (tercen 1.1.10 deployed ~2026-09-25 17:47Z;
-# authenticated rlib PACKAGES verified 200 on prod): a fresh instance
-# installing Fast t-SNE 0.2.1 with a dummy tercen.github.token must
-# SUCCEED end-to-end. The anonymous run is the control.
+# DIAGNOSIS COMPLETE (2026-09-26): fast_tSNE 0.2.1 pins renv 0.9.2, whose
+# era's renv/activate.R attaches `Authorization: token $GITHUB_PAT` to
+# EVERY bootstrap fetch whenever GITHUB_PAT is set. The mirror now treats
+# a non-JWT Authorization as anonymous (200), but the GitHub fallback leg
+# (https://api.github.com/repos/rstudio/renv/tarball/0.9.2 — the mirror
+# index carries renv 1.2.4, so the exact-match install path never fires)
+# returns 401 for any INVALID token => wget exit 6 => `no package called
+# 'renv'`. The customer's vault token is dead => their failure. Anonymous
+# and VALID-token fetches are healthy.
+#
+# INJECTION CORRECTION (the original dummy leg was void): it appended
+# tercen.github.token to config/tercen/, but CreateGitOperatorTask is in
+# tercen.worker.available.task.types — the WORKER claims the task and
+# reads config/worker/. Its bootstrap ran anonymous all along. The token
+# now goes to start-tercen/config/worker/config.yaml.
+#
+# LEGS:
+#  - github-token: real PAT (org secret TERCEN_GITHUB_TOKEN) in the worker
+#    config. Must be GREEN. Proof: the worker log's `bootstrapRenv --`
+#    launch line carries `GITHUB_PAT=<redacted>` (1.1.10 redaction) — the
+#    pair is absent entirely when no token reached the bootstrap, so this
+#    cannot pass on another void leg.
+#  - anonymous: control, no token. GREEN.
+#  - dummy-token: negative control — the deterministic customer failure
+#    signature ('wget' nonzero exit / no package called 'renv'). The
+#    install step is continue-on-error and the verdict step REQUIRES the
+#    signature; a green install or a different failure fails the job.
 name: repro-ram-operator-install
 
 on:
@@ -23,7 +47,7 @@ on:
         required: false
         default: '1.1.10'
   push:
-    branches: [feature/start-tercen-pg-repro]
+    branches: [feature/repro-real-github-token]
 
 jobs:
   install:
@@ -33,17 +57,47 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - mode: dummy-token   # customer shape: Authorization header on every fetch
-            token: dummy
-          - mode: anonymous     # control: no Authorization header
-            token: ''
+          - mode: github-token   # real PAT — the authed customer shape, healthy
+            inject: secret
+          - mode: anonymous      # control: no Authorization header
+            inject: none
+          - mode: dummy-token    # negative control: dead-token failure signature
+            inject: dummy
     steps:
       - uses: actions/checkout@v4
 
-      - name: Instance config — dummy tercen.github.token
-        if: ${{ matrix.token != '' }}
+      - name: Guard — token legs need a secret and a redacting image
+        if: ${{ matrix.inject == 'secret' }}
+        env:
+          GH_PAT_VALUE: ${{ secrets.TERCEN_GITHUB_TOKEN }}
         run: |
-          printf "\n# repro: garbage token => Authorization header on bootstrap fetches\ntercen.github.token: 'dummy'\n" >> start-tercen/config/tercen/config.yaml
+          # The launch-line redaction (GITHUB_PAT=<redacted>) shipped in
+          # 1.1.10 (bf0720d9e). Earlier tags print the RAW token into
+          # service logs — refuse to run the secret leg on them.
+          TAG='${{ github.event.inputs.tercen-tag || '1.1.10' }}'
+          oldest="$(printf '%s\n1.1.10\n' "$TAG" | sort -V | head -1)"
+          if [ "$oldest" != '1.1.10' ]; then
+            echo "::error::refusing to inject the secret on tercen $TAG (< 1.1.10 — no launch-line redaction)"
+            exit 1
+          fi
+          if [ -z "$GH_PAT_VALUE" ]; then
+            echo "::error::TERCEN_GITHUB_TOKEN is empty here — org secret not available to tercen/actions (access list?)"
+            exit 1
+          fi
+          echo "secret present (length $(printf %s "$GH_PAT_VALUE" | wc -c)), image tag $TAG ok"
+
+      - name: Worker config — inject tercen.github.token
+        if: ${{ matrix.inject != 'none' }}
+        env:
+          GH_PAT_VALUE: ${{ matrix.inject == 'secret' && secrets.TERCEN_GITHUB_TOKEN || matrix.inject }}
+        run: |
+          # CreateGitOperatorTask is claimed by the WORKER
+          # (tercen.worker.available.task.types) — inject where the task
+          # executor actually reads config. Value flows via env only; it
+          # never appears in the script text or the repo.
+          printf "\n# repro: token reaches the task-executing worker\ntercen.github.token: '%s'\n" "$GH_PAT_VALUE" \
+            >> start-tercen/config/worker/config.yaml
+          grep -c 'tercen.github.token' start-tercen/config/worker/config.yaml
 
       - name: Start fresh Tercen instance
         uses: ./start-tercen
@@ -52,6 +106,7 @@ jobs:
           sarno-tag: '1.2.5'
 
       - name: Install fast_tSNE 0.2.1 (the customer flow)
+        continue-on-error: ${{ matrix.mode == 'dummy-token' }}
         run: |
           docker run --net=host --rm \
             -e TERCEN_USERNAME=test \
@@ -60,13 +115,40 @@ jobs:
             tercen/tercenctl:release operator install \
               -r https://github.com/tercen/fast_tSNE_operator \
               -t 0.2.1 2>&1 | tee install-${{ matrix.mode }}.log
-          # Expected: BOTH jobs pass end-to-end (task reaches DoneState).
-          # A create.operator.renv.failed here = regression; check the
-          # uploaded log for the exact fetch warnings.
+          # github-token + anonymous legs: must reach `state -- done`
+          # end-to-end. A failure here = regression (or a dead secret).
+          # dummy-token leg: expected to fail — verdict step below.
+
+      - name: Verdict — dummy must fail exactly like the customer
+        if: ${{ matrix.mode == 'dummy-token' }}
+        run: |
+          if grep -qE "nonzero exit status|no package called .renv." install-dummy-token.log; then
+            echo "expected dead-token failure signature present (customer repro confirmed)"
+          elif grep -q "state -- done" install-dummy-token.log; then
+            echo "::error::dummy-token install SUCCEEDED — the failure signature is gone; mechanism changed, investigate"
+            exit 1
+          else
+            echo "::error::failed without the expected signature — new failure mode:"
+            tail -30 install-dummy-token.log
+            exit 1
+          fi
+
+      - name: Proof — the token reached the bootstrap
+        if: ${{ matrix.mode == 'github-token' }}
+        run: |
+          docker compose -f start-tercen/docker-compose.yml logs --no-color tercen-worker > worker-github-token.log
+          line="$(grep -m1 'bootstrapRenv --' worker-github-token.log || true)"
+          echo "launch line: $line"
+          echo "$line" | grep -q 'GITHUB_PAT=<redacted>' || {
+            echo "::error::no GITHUB_PAT pair on the bootstrapRenv launch line — the token did NOT reach the bootstrap (void-leg class)"
+            exit 1
+          }
 
       - name: Upload install log
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: fast-tsne-install-${{ matrix.mode }}
-          path: install-*.log
+          path: |
+            install-*.log
+            worker-*.log
