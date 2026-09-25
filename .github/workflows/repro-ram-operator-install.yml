@@ -1,0 +1,72 @@
+# Repro harness for the customer (Ram) operator-install failure:
+# a fresh local Tercen instance installing an operator whose renv bootstrap
+# fetches from prod cran.tercen.com.
+#
+# HISTORY: this harness was built to reproduce Ram's operator-install
+# failure (`create.operator.renv.failed`). RED side is on record: prod
+# cran.tercen.com rlib routes used to 500 on ANY Authorization header
+# (JWTError; sci#1665), and bootstrapRenv injects `tercen.github.token`
+# as GITHUB_PAT into the restore container (sci_api_service
+# git_operator.dart), so a dummy token made every renv fetch fail.
+#
+# CURRENT JOB = GREEN PROOF (tercen 1.1.10 deployed ~2026-09-25 17:47Z;
+# authenticated rlib PACKAGES verified 200 on prod): a fresh instance
+# installing Fast t-SNE 0.2.1 with a dummy tercen.github.token must
+# SUCCEED end-to-end. The anonymous run is the control.
+name: repro-ram-operator-install
+
+on:
+  workflow_dispatch:   # stays — becomes dispatchable once this lands on the default branch
+    inputs:
+      tercen-tag:
+        description: 'tercen/tercen image tag to boot the fresh instance with'
+        required: false
+        default: '1.1.10'
+  push:
+    branches: [feature/start-tercen-pg-repro]
+
+jobs:
+  install:
+    name: operator install (${{ matrix.mode }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - mode: dummy-token   # customer shape: Authorization header on every fetch
+            token: dummy
+          - mode: anonymous     # control: no Authorization header
+            token: ''
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instance config — dummy tercen.github.token
+        if: ${{ matrix.token != '' }}
+        run: |
+          printf "\n# repro: garbage token => Authorization header on bootstrap fetches\ntercen.github.token: 'dummy'\n" >> start-tercen/config/tercen/config.yaml
+
+      - name: Start fresh Tercen instance
+        uses: ./start-tercen
+        with:
+          branch: ${{ github.event.inputs.tercen-tag || '1.1.10' }}
+          sarno-tag: '1.2.5'
+
+      - name: Install fast_tSNE 0.2.1 (the customer flow)
+        run: |
+          docker run --net=host --rm \
+            -e TERCEN_USERNAME=test \
+            -e TERCEN_PASSWORD=test \
+            -e TERCEN_URI=http://172.42.0.42:5400 \
+            tercen/tercenctl:release operator install \
+              -r https://github.com/tercen/fast_tSNE_operator \
+              -t 0.2.1 2>&1 | tee install-${{ matrix.mode }}.log
+          # Expected: BOTH jobs pass end-to-end (task reaches DoneState).
+          # A create.operator.renv.failed here = regression; check the
+          # uploaded log for the exact fetch warnings.
+
+      - name: Upload install log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fast-tsne-install-${{ matrix.mode }}
+          path: install-*.log

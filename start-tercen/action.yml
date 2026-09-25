@@ -3,18 +3,21 @@ name: start-tercen
 description: Start a local instance of tercen to run tests
 
 inputs:
-  branch:  
-    description: 'Tercen image branch/tag'
-    required: false
-    default: 'stage'
+  branch:
+    description: 'Tercen image branch/tag (explicit — e.g. 1.1.10; no silent default)'
+    required: true
   sarno-tag:
     description: 'Sarno image branch/tag'
     required: false
-    default: 'stage'
+    default: '1.2.5'
+  github-token:
+    description: 'Optional GitHub token (ghcr auth + renv PAT). Only pass on >=1.1.10 (launch-line redaction).'
+    required: false
+    default: ''
 
 runs:
   using: "composite"
-  steps: 
+  steps:
     - name: Pull tercenctl
       run: docker pull tercen/tercenctl:release
       shell: bash
@@ -24,8 +27,14 @@ runs:
       env:
         TERCEN_IMAGE_TAG: ${{ inputs.branch }}
         SARNO_IMAGE_TAG: ${{ inputs.sarno-tag }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
     - run: |
         chmod +x check-tercen-status.sh
-        ./check-tercen-status.sh http://172.42.0.42 5400 
+        ./check-tercen-status.sh http://172.42.0.42 5400
+      shell: bash
+      working-directory: ${{ github.action_path }}
+    - name: Dump tercen logs on failure
+      if: failure()
+      run: docker compose -f "docker-compose.yml" logs --no-color tercen tercen-worker
       shell: bash
       working-directory: ${{ github.action_path }}
