@@ -1,0 +1,141 @@
+# Sartorius Azure template import leg — the customer's GitProjectTask flow
+# (wizard shape) against a FRESH instance:
+#   project create WITH GIT_URL meta → `tercenctl git pull` (RESET_PULL
+#   task; GIT_PAT meta → server-side encryptedGitToken) → DoneState →
+#   worker writes GIT_COMMIT/GIT_BRANCH back onto the project.
+#
+# WHY THE REST CALL: tercenctl `project create` cannot attach meta, and
+# `git pull` reads GIT_URL from PROJECT meta (errors if absent) — the UI
+# wizard (create_project_wizard.dart L81-98) creates the project WITH
+# GIT_URL in the same create call. We replicate exactly that:
+#   POST api/v1/user/connect2 {domain, usernameOrEmail, password}
+#     → token at .token.token (attached RAW in Authorization — no Bearer;
+#       server AclContextFactory.getToken resolves it)
+#   POST api/v1/project  (body shape per client getOrCreateProjectNamed:
+#     kind/name/isPublic/isHidden/acl.owner=<session user id>/meta Pairs)
+#
+# The worker's Git wrapper embeds the token as URL userinfo `pat:<token>`
+# (sci_git.dart L15) — valid for Azure DevOps https clones (any username,
+# PAT as password). skipLfs: true in _cloneGit, so the repo's LFS TestData
+# never enters the picture.
+#
+# TOKEN AVAILABILITY: AZ_SRT_TOKEN is not in tercen/actions' repo-level
+# secret list (org-scoped or on another repo) — the Guard FAILS CLOSED
+# with a length-only print; the run cannot silently degrade to anonymous.
+# The token value NEVER appears in logs: passed via env into tercenctl
+# only, and the task's GIT_PAT meta is encrypted server-side
+# (task_service _ensureSecret strips the meta).
+name: import-azure-template
+
+on:
+  workflow_dispatch:
+    inputs:
+      tercen-tag:
+        description: 'tercen/tercen image tag to boot the fresh instance with'
+        required: false
+        default: '1.1.10'
+  push:
+    branches: [feature/azure-template-import]
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    env:
+      AZURE_REPO_URL: https://dev.azure.com/sartorius-lps/lps_ingenix_modules/_git/lps_tercen_phenotyping_template
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Guard — Azure PAT must be present (fail closed, length only)
+        env:
+          AZ_TOKEN_VALUE: ${{ secrets.AZ_SRT_TOKEN }}
+        run: |
+          if [ -z "$AZ_TOKEN_VALUE" ]; then
+            echo "::error::AZ_SRT_TOKEN is empty here — secret not available to tercen/actions (org-scoped? access list?). The import cannot run anonymous; fix the secret access first."
+            exit 1
+          fi
+          echo "AZ_SRT_TOKEN present (length $(printf %s "$AZ_TOKEN_VALUE" | wc -c))"
+
+      - name: Start fresh Tercen instance
+        uses: ./start-tercen
+        with:
+          branch: ${{ github.event.inputs.tercen-tag || '1.1.10' }}
+          sarno-tag: '1.2.5'
+
+      - name: Login + create project with GIT_URL meta (wizard shape)
+        # shell: bash => -eo pipefail; the REST bodies carry no secret.
+        shell: bash
+        run: |
+          base='http://172.42.0.42:5400'
+          login="$(curl -sf -X POST "$base/api/v1/user/connect2" \
+            -H 'content-type: application/json' \
+            -d '{"domain":"tercen","usernameOrEmail":"test","password":"test"}')" || {
+            echo "::error::connect2 login failed"; exit 1; }
+          token="$(printf %s "$login" | jq -r '.token.token')"
+          user_id="$(printf %s "$login" | jq -r '.user.id')"
+          [ -n "$token" ] && [ "$token" != "null" ] || { echo "::error::no token in connect2 response"; exit 1; }
+          echo "login ok (user $user_id)"
+          body="$(jq -n --arg url "$AZURE_REPO_URL" --arg owner "$user_id" '{
+            kind: "Project",
+            name: "lps_tercen_phenotyping_template",
+            isPublic: false,
+            isHidden: false,
+            acl: {kind: "Acl", owner: $owner},
+            meta: [{kind: "Pair", key: "GIT_URL", value: $url}]
+          }')"
+          create="$(curl -s -o create-resp.json -w '%{http_code}' -X POST "$base/api/v1/project" \
+            -H 'content-type: application/json' \
+            -H "Authorization: $token" \
+            -d "$body")"
+          if [ "$create" != "200" ]; then
+            echo "::error::project create returned $create:"; cat create-resp.json; exit 1
+          fi
+          project_id="$(jq -r '.id' create-resp.json)"
+          echo "project created: $project_id"
+          echo "PROJECT_ID=$project_id" >> "$GITHUB_ENV"
+          echo "TERCEN_TOKEN=$token" >> "$GITHUB_ENV"   # session token, fresh instance, torn down with the job
+
+      - name: Pull the template (RESET_PULL GitProjectTask)
+        shell: bash
+        env:
+          AZ_TOKEN_VALUE: ${{ secrets.AZ_SRT_TOKEN }}
+        run: |
+          docker run --net=host --rm \
+            -e TERCEN_USERNAME=test \
+            -e TERCEN_PASSWORD=test \
+            -e TERCEN_URI=http://172.42.0.42:5400 \
+            tercen/tercenctl:release git pull \
+            -p "$PROJECT_ID" \
+            --token "$AZ_TOKEN_VALUE" \
+            -b main -w 2>&1 | tee git-pull.log
+
+      - name: Assert — DoneState + GIT_COMMIT written back
+        shell: bash
+        run: |
+          grep -q "Git pull completed successfully" git-pull.log || {
+            echo "::error::git pull did not reach DoneState (tercenctl prints '✓ Git pull completed successfully' — sci_ctl git.dart poll loop)"; tail -10 git-pull.log; exit 1; }
+          base='http://172.42.0.42:5400'
+          proj="$(curl -sf "$base/api/v1/project/$PROJECT_ID" -H "Authorization: $TERCEN_TOKEN")" || {
+            echo "::error::project GET failed"; exit 1; }
+          echo "project meta after pull:"
+          printf %s "$proj" | jq -r '.meta[] | "\(.key) = \(.value)"'
+          printf %s "$proj" | jq -e '.meta | any(.key == "GIT_COMMIT" and (.value | length > 0))' > /dev/null || {
+            echo "::error::worker did not write GIT_COMMIT back onto the project"; exit 1; }
+          echo "import complete: GIT_COMMIT present"
+
+      - name: Capture service logs (diagnostics for any failure surface)
+        if: always()
+        run: |
+          docker compose -f start-tercen/docker-compose.yml logs --no-color tercen > tercen.log || true
+          docker compose -f start-tercen/docker-compose.yml logs --no-color tercen-worker > worker.log || true
+          wc -l tercen.log worker.log
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: azure-import-logs
+          path: |
+            git-pull.log
+            create-resp.json
+            tercen.log
+            worker.log
