@@ -1,4 +1,7 @@
-version: "3.9"
+# PODMAN-DIRECT: no dind. Each tercen service runs its own podman
+# (podman-init.sh starts the podman system service inside the container at
+# /run/podman/podman.sock — the same model as the production worker chart).
+# Nothing is shared between services except tercen-data.
 
 networks:
   tercen:
@@ -60,7 +63,8 @@ services:
     restart: always
 
   tercen:
-    # 1.1.x image: podman-init needs cgroup v2 delegation (operator runtime)
+    # privileged: podman-init needs cgroup v2 delegation; runs as root until
+    # podman-init drops to 1000 (no user: key — podman-init exits otherwise)
     privileged: true
     depends_on:
       postgres:
@@ -73,26 +77,31 @@ services:
         aliases:
           - tercen
     image: tercen/tercen:${TERCEN_IMAGE_TAG}
-    # 1.1.x: main spawns a podman container with the fixed name "sarno"; on a
-    # crash-restart the store still holds it and the name collides — remove it
-    # before podman-init drops privileges
+    # DEVIATION from fable's spec (evidence-backed): the container-local
+    # podman store survives `compose restart` and crash-restarts, and
+    # container_manager only skips an already-RUNNING sarno — a stopped
+    # leftover re-collides on the fixed name and crash-loops forever. The
+    # pre-step is not dind-era; it is the restart-safety net.
     entrypoint: ["/bin/sh", "-c", "podman stop -t 0 sarno 2>/dev/null; podman rm -f sarno 2>/dev/null; exec /usr/local/bin/podman-init.sh /app/bin/tercen"]
+    environment:
+      # main spawns its own sarno container — pin it explicitly or it falls
+      # back to the image default
+      - TERCEN_SARNO_IMAGE=docker.io/tercen/sarno:${SARNO_IMAGE_TAG}
+      # optional ghcr auth + renv PAT (only safe on >=1.1.10: launch-line
+      # redaction); empty = unset behaviour
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
     ports:
       - 5400:5400
       - 50051:50051
     volumes:
-      - /var/lib/tercen/external:/var/lib/tercen/external
+      # shared cache: operator tree + renv cache + uploads (bootstrapRenv
+      # writes rw, run containers mount ro)
       - tercen-data:/var/lib/tercen/data
       - ./config/tercen:/etc/tercen
-      # 1.1.x: main spawns its own sarno via podman — keep its podman store
-      # SEPARATE from the worker's (shared /var/run would leak the worker's
-      # socket here and the fixed container name "sarno" would collide)
-      - var-run-main:/var/run
-      - tmp:/tmp
     restart: always
 
-  # worker-mode tercen: claims tasks from the HA scheduler and runs
-  # operator/task containers through the shared dind podman socket
+  # worker-mode tercen: claims tasks from the HA scheduler and runs operator
+  # containers through its OWN container-local podman store
   tercen-worker:
     privileged: true
     depends_on:
@@ -105,47 +114,13 @@ services:
     image: tercen/tercen:${TERCEN_IMAGE_TAG}
     environment:
       - TERCEN_SARNO_IMAGE=docker.io/tercen/sarno:${SARNO_IMAGE_TAG}
-    # worker runs as user 1000 and uses the dind docker socket (shared var-run
-    # volume); dind creates it root:root 660, so open it up before podman-init
-    # drops privileges. A transient podman/socket race can still kill the first
-    # boot — restart: always recovers it.
-    entrypoint: ["/bin/sh", "-c", "i=0; until [ -S /var/run/docker.sock ] && [ $${i} -ge 5 ]; do chmod 666 /var/run/docker.sock 2>/dev/null; i=$$((i+1)); sleep 1; done; podman stop -t 0 sarno 2>/dev/null; podman rm -f sarno 2>/dev/null; exec /usr/local/bin/podman-init.sh /app/bin/tercen"]
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
     volumes:
       - ./config/worker:/etc/tercen
-      # real (dereferenced) CA files: the runtime-r image's /etc/ssl/certs is a
-      # symlink farm whose targets don't exist in the image, so bootstrapRenv's
-      # nested /etc/ssl/certs mount leaves libcurl with no CA ("Problem with
-      # the SSL CA cert") and every renv fetch fails
-      - ./config/certs:/etc/ssl/certs:ro
-      - /var/lib/tercen/external:/var/lib/tercen/external
       - tercen-data:/var/lib/tercen/data
-      - var-run:/var/run
-      - tmp:/tmp
-    restart: always
-
-  # 1.1.x: the tercen services spawn their own sarno containers (fixed name,
-  # --network=host inside their own netns) — no dedicated sarno service here.
-
-  runtime-docker:
-    privileged: true
-    image: docker:24.0.6-dind-alpine3.18
-    networks:
-      tercen:
-        aliases:
-          - runtime-docker
-    volumes:
-      - var-run:/var/run
-      - var-lib-docker:/var/lib/docker
-      - tercen-data:/var/lib/tercen/data
-      - /var/lib/tercen/external:/var/lib/tercen/external
-      - tmp:/tmp
     restart: always
 
 
 volumes:
   pg-data:
   tercen-data:
-  var-lib-docker:
-  var-run:
-  var-run-main:
-  tmp:

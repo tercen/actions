@@ -19,8 +19,6 @@ tercen.pg.port: '5432'
 tercen.pg.database: 'tercen'
 tercen.pg.user: 'tercen'
 tercen.pg.password: 'tercen'
-# mount host CA store into bootstrap/operator containers (HTTPS fetches to cran.tercen.com)
-tercen.mount.ssl.root.cert: 'true'
 # single redis (pg-backend-ci pattern); prod uses sentinel, CI harness doesn't need HA
 tercen.redis.host: 'redis'
 tercen.redis.port: '6379'
@@ -37,7 +35,6 @@ tercen.sarno.ip: '0.0.0.0'
 
 tercen.client.uri: http://172.42.0.42:5400
 tercen.worker.ip: 172.42.0.42
-tercen.worker.runtime.ip: runtime-docker
 
 tercen.external.storage.enabled: 'true'
 ## external.storage path must the same on the host and in the container
@@ -97,4 +94,6 @@ tercen.worker.nodepools:
     capabilities: []
     minNodes: 0
     maxNodes: 1
+
+
 
