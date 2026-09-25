@@ -64,19 +64,26 @@ jobs:
           sarno-tag: '1.2.5'
 
       - name: Create project with GIT_URL meta (wizard shape)
-        # shell: bash => -eo pipefail (a nonzero tercenctl exit must fail the
-        # step even through tee). -f json -q => the log is pure JSON; the ID
-        # parse below fails closed with the full log if the shape surprises.
+        # `tercenctl -f json -q` stdout is pure JSON — keep docker's
+        # image-pull chatter OUT of it: run 36199931509 had a SUCCESSFUL
+        # create (owner test + GIT_URL meta Pair in the response) fail the
+        # step because `2>&1 | tee` let the pull progress break the jq
+        # parse. stderr goes to its own artifact instead.
         shell: bash
         run: |
-          docker run --net=host --rm \
-            -e TERCEN_USERNAME=test \
-            -e TERCEN_PASSWORD=test \
-            -e TERCEN_URI=http://172.42.0.42:5400 \
-            "tercen/tercenctl:$CTL_TAG" project create \
-            -n lps_tercen_phenotyping_template \
-            -u "$AZURE_REPO_URL" \
-            -f json -q 2>&1 | tee project-create.log
+          if ! docker run --net=host --rm \
+              -e TERCEN_USERNAME=test \
+              -e TERCEN_PASSWORD=test \
+              -e TERCEN_URI=http://172.42.0.42:5400 \
+              "tercen/tercenctl:$CTL_TAG" project create \
+              -n lps_tercen_phenotyping_template \
+              -u "$AZURE_REPO_URL" \
+              -f json -q > project-create.log 2> docker-stderr.log; then
+            echo "::error::tercenctl project create failed — stderr:"; cat docker-stderr.log
+            echo "— stdout:"; cat project-create.log
+            exit 1
+          fi
+          cat project-create.log
           PROJECT_ID="$(jq -r '.id // .project.id // empty' project-create.log 2>/dev/null || true)"
           if [ -z "$PROJECT_ID" ] || [ "$PROJECT_ID" = "null" ]; then
             echo "::error::could not parse project id from create output:"; cat project-create.log; exit 1
@@ -128,5 +135,6 @@ jobs:
           path: |
             project-create.log
             git-pull.log
+            docker-stderr.log
             tercen.log
             worker.log
