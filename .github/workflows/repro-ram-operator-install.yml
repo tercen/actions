@@ -70,11 +70,20 @@ jobs:
         if: ${{ matrix.inject == 'secret' }}
         env:
           GH_PAT_VALUE: ${{ secrets.TERCEN_GITHUB_TOKEN }}
+          TERCEN_TAG_INPUT: ${{ github.event.inputs.tercen-tag || '1.1.10' }}
         run: |
           # The launch-line redaction (GITHUB_PAT=<redacted>) shipped in
           # 1.1.10 (bf0720d9e). Earlier tags print the RAW token into
           # service logs — refuse to run the secret leg on them.
-          TAG='${{ github.event.inputs.tercen-tag || '1.1.10' }}'
+          # Numeric-only: sort -V orders digits before letters, so
+          # stage/release/latest/dev/1.1.10-rc.1 would all pass a bare
+          # version compare while pointing at unknown/pre-redaction
+          # images. Refuse anything that is not a plain x.y.z release.
+          TAG="$TERCEN_TAG_INPUT"
+          if ! [[ "$TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::refusing non-numeric tercen tag '$TAG' — redaction status unknown (only plain x.y.z releases are guarded)"
+            exit 1
+          fi
           oldest="$(printf '%s\n1.1.10\n' "$TAG" | sort -V | head -1)"
           if [ "$oldest" != '1.1.10' ]; then
             echo "::error::refusing to inject the secret on tercen $TAG (< 1.1.10 — no launch-line redaction)"
@@ -106,6 +115,11 @@ jobs:
           sarno-tag: '1.2.5'
 
       - name: Install fast_tSNE 0.2.1 (the customer flow)
+        # shell: bash => -eo pipefail. The default `bash -e {0}` lacks
+        # pipefail, so `tercenctl | tee` returns TEE's exit 0 and a failed
+        # install reads as success (run 36195229299's dummy leg exited 0
+        # on `state -- failed`; continue-on-error never engaged).
+        shell: bash
         continue-on-error: ${{ matrix.mode == 'dummy-token' }}
         run: |
           docker run --net=host --rm \
@@ -116,8 +130,17 @@ jobs:
               -r https://github.com/tercen/fast_tSNE_operator \
               -t 0.2.1 2>&1 | tee install-${{ matrix.mode }}.log
           # github-token + anonymous legs: must reach `state -- done`
-          # end-to-end. A failure here = regression (or a dead secret).
+          # (asserted by the next step, not by this exit code alone).
           # dummy-token leg: expected to fail — verdict step below.
+
+      - name: Assert — green legs must reach done state
+        if: ${{ matrix.mode != 'dummy-token' }}
+        run: |
+          grep -q '^state -- done$' install-${{ matrix.mode }}.log || {
+            echo "::error::install log has no 'state -- done' — green leg did not actually succeed"
+            tail -5 install-${{ matrix.mode }}.log
+            exit 1
+          }
 
       - name: Verdict — dummy must fail exactly like the customer
         if: ${{ matrix.mode == 'dummy-token' }}
