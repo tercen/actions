@@ -3,14 +3,13 @@ name: start-tercen
 description: Start a local instance of tercen to run tests
 
 inputs:
-  branch:  
-    description: 'Tercen image branch/tag'
-    required: false
-    default: 'stage'
+  branch:
+    description: 'Tercen image branch/tag (explicit — e.g. 1.1.9 or release; no silent default)'
+    required: true
   sarno-tag:
     description: 'Sarno image branch/tag'
     required: false
-    default: 'stage'
+    default: '1.2.5'
 
 runs:
   using: "composite"

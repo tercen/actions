@@ -9,26 +9,74 @@ networks:
 
 services:
 
-  couchdb:
+  postgres:
     networks:
       tercen:
         aliases:
-          - couchdb
-    image: ibmcom/couchdb3:3.1.1
+          - postgres
+    image: postgres:16
     environment:
-      - COUCHDB_USER=admin
-      - COUCHDB_PASSWORD=admin
+      - POSTGRES_USER=tercen
+      - POSTGRES_PASSWORD=tercen
+      - POSTGRES_DB=tercen
     volumes:
-      - couchdb3-data:/opt/couchdb/data
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tercen -d tercen"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: always
+
+  redis:
+    networks:
+      tercen:
+        aliases:
+          - redis
+    image: redis:7-alpine
+    command: ["redis-server", "--requirepass", "admin"]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a admin ping | grep PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: always
+
+  scheduler:
+    networks:
+      tercen:
+        aliases:
+          - scheduler
+    image: tercen/ha-scheduler:0.33.0
+    environment:
+      - RUST_LOG=info,sci_ha_scheduler_rust=info
+      - REDIS_SENTINELS=redis:6379
+      - REDIS_SERVICE_NAME=redis
+      - REDIS_PASSWORD=admin
+      - GRPC_PORT=50051
+    depends_on:
+      redis:
+        condition: service_healthy
     restart: always
 
   tercen:
+    # 1.1.x image: podman-init needs cgroup v2 delegation (operator runtime)
+    privileged: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     networks:
       tercen:
         ipv4_address: 172.42.0.42
         aliases:
           - tercen
     image: tercen/tercen:${TERCEN_IMAGE_TAG}
+    # 1.1.x: main spawns a podman container with the fixed name "sarno"; on a
+    # crash-restart the store still holds it and the name collides — remove it
+    # before podman-init drops privileges
+    entrypoint: ["/bin/sh", "-c", "podman stop -t 0 sarno 2>/dev/null; podman rm -f sarno 2>/dev/null; exec /usr/local/bin/podman-init.sh /app/bin/tercen"]
     ports:
       - 5400:5400
       - 50051:50051
@@ -36,23 +84,47 @@ services:
       - /var/lib/tercen/external:/var/lib/tercen/external
       - tercen-data:/var/lib/tercen/data
       - ./config/tercen:/etc/tercen
+      # 1.1.x: main spawns its own sarno via podman — keep its podman store
+      # SEPARATE from the worker's (shared /var/run would leak the worker's
+      # socket here and the fixed container name "sarno" would collide)
+      - var-run-main:/var/run
+      - tmp:/tmp
+    restart: always
+
+  # worker-mode tercen: claims tasks from the HA scheduler and runs
+  # operator/task containers through the shared dind podman socket
+  tercen-worker:
+    privileged: true
+    depends_on:
+      - tercen
+    networks:
+      tercen:
+        ipv4_address: 172.42.0.43
+        aliases:
+          - tercen-worker
+    image: tercen/tercen:${TERCEN_IMAGE_TAG}
+    environment:
+      - TERCEN_SARNO_IMAGE=docker.io/tercen/sarno:${SARNO_IMAGE_TAG}
+    # worker runs as user 1000 and uses the dind docker socket (shared var-run
+    # volume); dind creates it root:root 660, so open it up before podman-init
+    # drops privileges. A transient podman/socket race can still kill the first
+    # boot — restart: always recovers it.
+    entrypoint: ["/bin/sh", "-c", "i=0; until [ -S /var/run/docker.sock ] && [ $${i} -ge 5 ]; do chmod 666 /var/run/docker.sock 2>/dev/null; i=$$((i+1)); sleep 1; done; podman stop -t 0 sarno 2>/dev/null; podman rm -f sarno 2>/dev/null; exec /usr/local/bin/podman-init.sh /app/bin/tercen"]
+    volumes:
+      - ./config/worker:/etc/tercen
+      # real (dereferenced) CA files: the runtime-r image's /etc/ssl/certs is a
+      # symlink farm whose targets don't exist in the image, so bootstrapRenv's
+      # nested /etc/ssl/certs mount leaves libcurl with no CA ("Problem with
+      # the SSL CA cert") and every renv fetch fails
+      - ./config/certs:/etc/ssl/certs:ro
+      - /var/lib/tercen/external:/var/lib/tercen/external
+      - tercen-data:/var/lib/tercen/data
       - var-run:/var/run
       - tmp:/tmp
     restart: always
 
-  sarno:
-    networks:
-      tercen:
-        aliases:
-          - sarno
-    image: tercen/sarno:${SARNO_IMAGE_TAG}
-    environment:
-      - TERCEN_GRPC_HOST=tercen
-    volumes:
-      - tercen-data:/var/lib/tercen/data
-      - ./config/sarno/sarno.toml:/root/.config/sarno/sarno.toml
-      - tmp:/tmp
-    restart: always
+  # 1.1.x: the tercen services spawn their own sarno containers (fixed name,
+  # --network=host inside their own netns) — no dedicated sarno service here.
 
   runtime-docker:
     privileged: true
@@ -71,8 +143,9 @@ services:
 
 
 volumes:
-  couchdb3-data:
+  pg-data:
   tercen-data:
   var-lib-docker:
   var-run:
+  var-run-main:
   tmp:

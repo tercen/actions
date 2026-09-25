@@ -12,11 +12,26 @@ configs:
         show.worker.admin: 'true'
 # ALL 0 # OFF 2000 # FINEST 300 # FINER 400 # FINE 500 # CONFIG 700 # INFO 800 # WARNING 900 # SEVERE 1000 # SHOUT 1200
 tercen.log.level: '0'
-tercen.couchdb.address: couchdb
-tercen.couchdb.user: admin
-tercen.couchdb.password: admin
+# PG-era metadata layer (was couchdb; keys per sci_api_service tercen_config.dart)
+tercen.db.backend: 'postgres'
+tercen.pg.host: 'postgres'
+tercen.pg.port: '5432'
+tercen.pg.database: 'tercen'
+tercen.pg.user: 'tercen'
+tercen.pg.password: 'tercen'
+# mount host CA store into bootstrap/operator containers (HTTPS fetches to cran.tercen.com)
+tercen.mount.ssl.root.cert: 'true'
+# single redis (pg-backend-ci pattern); prod uses sentinel, CI harness doesn't need HA
+tercen.redis.host: 'redis'
+tercen.redis.port: '6379'
+tercen.redis.password: 'admin'
+tercen.redis.sentinel.enabled: 'false'
+# task submission goes through the HA scheduler (sci_ha_scheduler)
+tercen.scheduler.host: 'scheduler'
+tercen.scheduler.port: '50051'
 
-tercen.sarno.ip: 'sarno'
+# passed to spawned sarno containers as the LISTEN address (--ip) — must be an IP
+tercen.sarno.ip: '0.0.0.0'
 # upgrade from 0.9.0 to 0.10.0
 # run.sarno.table.migration: 'true'
 
@@ -72,3 +87,14 @@ DefaultProfiles:
 ## tercen.user.service.ldap.port: '636'
 #
 #tercen.user.service.ldap.bind: 'dc=example,dc=org'
+
+# 1.1.x: node pools required by TercenConfig.nodePools (hasNodePool gates task placement)
+tercen.worker.nodepools:
+  - name: local
+    memoryPerNode: 6.5G
+    memoryThreshold: 0.9
+    cpusPerNode: 4
+    capabilities: []
+    minNodes: 0
+    maxNodes: 1
+

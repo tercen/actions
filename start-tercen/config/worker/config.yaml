@@ -1,0 +1,46 @@
+# worker-mode tercen: claims tasks from the HA scheduler, runs operator
+# containers through the shared podman socket (var-run volume)
+tercen.is.worker: 'true'
+tercen.worker.name: 'worker-1'
+tercen.db.backend: 'postgres'
+tercen.pg.host: 'postgres'
+tercen.pg.port: '5432'
+tercen.pg.database: 'tercen'
+tercen.pg.user: 'tercen'
+tercen.pg.password: 'tercen'
+tercen.redis.host: 'redis'
+tercen.redis.port: '6379'
+tercen.redis.password: 'admin'
+tercen.redis.sentinel.enabled: 'false'
+tercen.scheduler.host: 'scheduler'
+tercen.scheduler.port: '50051'
+# worker dials the main service API
+tercen.main.host: 'tercen'
+# IP (not hostname): task containers resolve it over the podman bridge
+tercen.worker.ip: '172.42.0.43'
+# HTTP callback for task containers = the worker's own listener (tercen.port)
+tercen.worker.port: '5400'
+tercen.worker.grpc.port: '50052'
+tercen.grpc.main.port: '50051'
+tercen.docker.socket: '/run/podman/podman.sock'
+# passed to spawned sarno containers as the LISTEN address (--ip) — must be an IP
+tercen.sarno.ip: '0.0.0.0'
+tercen.worker.runtime.ip: 'runtime-docker'
+# scheduler capacity: worker advertises cpu/mem for task placement
+tercen.worker.cpu: '4'
+tercen.worker.memory: '7500000000'
+# task executor isolates (required; no default in worker mode)
+tercen.worker.isolates: '4'
+tercen.worker.priority: '5'
+tercen.mount.ssl.root.cert: 'true'
+tercen.log.level: '0'
+
+# 1.1.x: node pools required by TercenConfig.nodePools (hasNodePool gates task placement)
+tercen.worker.nodepools:
+  - name: local
+    memoryPerNode: 6.5G
+    memoryThreshold: 0.9
+    cpusPerNode: 4
+    capabilities: []
+    minNodes: 0
+    maxNodes: 1
