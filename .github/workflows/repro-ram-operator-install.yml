@@ -122,8 +122,16 @@ jobs:
       - name: Verdict — dummy must fail exactly like the customer
         if: ${{ matrix.mode == 'dummy-token' }}
         run: |
+          # Two surfaces for the same signature: the full R output
+          # ('nonzero exit status' / 'no package called renv') or the
+          # tercenctl tail, which clips at the download line — the
+          # dead-token discriminator is a download that started and never
+          # completed (the mirror index leg passed; the GitHub leg died).
           if grep -qE "nonzero exit status|no package called .renv." install-dummy-token.log; then
-            echo "expected dead-token failure signature present (customer repro confirmed)"
+            echo "expected dead-token failure signature present (R-output surface)"
+          elif grep -q "create.operator.renv.failed" install-dummy-token.log \
+            && grep -qE "Downloading renv 0.9.2 \.\.\. ?$" install-dummy-token.log; then
+            echo "expected dead-token failure signature present (bootstrap died at the renv download — customer repro confirmed)"
           elif grep -q "state -- done" install-dummy-token.log; then
             echo "::error::dummy-token install SUCCEEDED — the failure signature is gone; mechanism changed, investigate"
             exit 1
