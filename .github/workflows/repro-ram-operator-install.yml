@@ -161,13 +161,25 @@ jobs:
           else
             echo "::error::failed without the expected signature — new failure mode:"
             tail -30 install-dummy-token.log
+            echo "--- worker log, renv/R surfaces (below tercenctl's clip): ---"
+            grep -A40 -m1 'bootstrapRenv --' worker-dummy-token.log || tail -40 worker-dummy-token.log
             exit 1
           fi
+
+      - name: Capture worker log (diagnostics for any failure surface)
+        # tercenctl clips the R/wget diagnostics below the download line —
+        # the worker container log is the only surface that carries them.
+        # Captured on EVERY leg: run 36196408870's dummy leg failed on a
+        # new surface (no 'Downloading renv' line at all) and the evidence
+        # was unrecoverable because only the github-token leg captured it.
+        if: always()
+        run: |
+          docker compose -f start-tercen/docker-compose.yml logs --no-color tercen-worker > worker-${{ matrix.mode }}.log || true
+          wc -l worker-${{ matrix.mode }}.log
 
       - name: Proof — the token reached the bootstrap
         if: ${{ matrix.mode == 'github-token' }}
         run: |
-          docker compose -f start-tercen/docker-compose.yml logs --no-color tercen-worker > worker-github-token.log
           line="$(grep -m1 'bootstrapRenv --' worker-github-token.log || true)"
           echo "launch line: $line"
           echo "$line" | grep -q 'GITHUB_PAT=<redacted>' || {
