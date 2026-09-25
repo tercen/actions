@@ -16,7 +16,9 @@
 name: repro-ram-operator-install
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:   # stays — becomes dispatchable once this lands on the default branch
+  push:
+    branches: [feature/start-tercen-pg-repro]
     inputs:
       tercen-tag:
         description: 'tercen/tercen image tag to boot the fresh instance with'

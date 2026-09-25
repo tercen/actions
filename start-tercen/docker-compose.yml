@@ -112,6 +112,11 @@ services:
         aliases:
           - tercen-worker
     image: tercen/tercen:${TERCEN_IMAGE_TAG}
+    # Same stop/rm pre-step as `tercen` (GATE CHANGE): startSarno is on the
+    # COMMON boot path (launcher.dart, before the isWorker branch), so the
+    # worker spawns its own sarno too and carries the identical
+    # fixed-name collision crash-loop on restart.
+    entrypoint: ["/bin/sh", "-c", "podman stop -t 0 sarno 2>/dev/null; podman rm -f sarno 2>/dev/null; exec /usr/local/bin/podman-init.sh /app/bin/tercen"]
     environment:
       - TERCEN_SARNO_IMAGE=docker.io/tercen/sarno:${SARNO_IMAGE_TAG}
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}
