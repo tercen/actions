@@ -1,0 +1,155 @@
+# Alex order 09-26: exercise the start-tercen action's `github-token` input
+# across ALL alternatives — valid / empty / invalid — and record what each
+# one actually does.
+#
+# STATIC ANALYSIS (to be confirmed or refuted empirically by this run):
+#  - The action maps github-token -> compose env GITHUB_TOKEN on BOTH
+#    services (docker-compose.yml main + tercen-worker).
+#  - podman-init.sh (entrypoint) consumes it as a ghcr.io REGISTRY
+#    credential only: writes /root/.config/containers/auth.json with
+#    "user:<token>"; logs "Created /root/.config/containers/auth.json" or
+#    "No GITHUB_TOKEN provided, skipping auth configuration".
+#  - The renv bootstrap chain (git_operator.dart) reads config keys
+#    `tercen.github.token` then `github.token` (case-sensitive map); the
+#    launcher only rewrites TERCEN_* env vars to tercen.* config keys, so
+#    env GITHUB_TOKEN lands as the literal key `GITHUB_TOKEN` and NEVER
+#    reaches the bootstrap. Expected on ALL THREE legs: install green via
+#    ANONYMOUS bootstrap — no GITHUB_PAT pair on the bootstrapRenv launch
+#    line.
+# The PR#5 lesson: never trust this read without the run. A leg deviating
+# (pair present, or an install failing under an invalid token) is a real
+# finding — the gates below fail closed on it.
+name: test-action-github-token
+
+on:
+  workflow_dispatch:
+    inputs:
+      tercen-tag:
+        description: 'tercen/tercen image tag to boot the fresh instance with'
+        required: false
+        default: '1.1.10'
+  push:
+    branches: [feature/action-token-alternatives]
+
+jobs:
+  action-token:
+    name: action github-token (${{ matrix.token-mode }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - token-mode: valid      # org secret TERCEN_GITHUB_TOKEN
+            fallback: ''
+          - token-mode: empty      # explicit empty input (default shape)
+            fallback: ''
+          - token-mode: invalid    # garbage value
+            fallback: 'not-a-real-token'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Guard — secret leg needs a redacting image and a live secret
+        if: ${{ matrix.token-mode == 'valid' }}
+        env:
+          GH_PAT_VALUE: ${{ secrets.TERCEN_GITHUB_TOKEN }}
+          TERCEN_TAG_INPUT: ${{ github.event.inputs.tercen-tag || '1.1.10' }}
+        run: |
+          # Same discipline as repro-ram-operator-install: we do not EXPECT
+          # this token to reach any launch line (that is the hypothesis
+          # under test), but if the mechanism ever changes the leg must
+          # already be on a redacting image (>= 1.1.10, bf0720d9e).
+          TAG="$TERCEN_TAG_INPUT"
+          if ! [[ "$TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::refusing non-numeric tercen tag '$TAG' — redaction status unknown (only plain x.y.z releases are guarded)"
+            exit 1
+          fi
+          oldest="$(printf '%s\n1.1.10\n' "$TAG" | sort -V | head -1)"
+          if [ "$oldest" != '1.1.10' ]; then
+            echo "::error::refusing to pass the secret on tercen $TAG (< 1.1.10 — no launch-line redaction)"
+            exit 1
+          fi
+          if [ -z "$GH_PAT_VALUE" ]; then
+            echo "::error::TERCEN_GITHUB_TOKEN is empty here — org secret not available to tercen/actions (access list?)"
+            exit 1
+          fi
+          echo "secret present (length $(printf %s "$GH_PAT_VALUE" | wc -c)), image tag $TAG ok"
+
+      - name: Start fresh Tercen instance
+        uses: ./start-tercen
+        with:
+          branch: ${{ github.event.inputs.tercen-tag || '1.1.10' }}
+          sarno-tag: '1.2.5'
+          github-token: ${{ matrix.token-mode == 'valid' && secrets.TERCEN_GITHUB_TOKEN || matrix.fallback }}
+
+      - name: Install fast_tSNE 0.2.1 (the customer flow)
+        # shell: bash => -eo pipefail (the PR#5 lesson: default bash -e lets
+        # tee mask tercenctl's exit code).
+        shell: bash
+        run: |
+          docker run --net=host --rm \
+            -e TERCEN_USERNAME=test \
+            -e TERCEN_PASSWORD=test \
+            -e TERCEN_URI=http://172.42.0.42:5400 \
+            tercen/tercenctl:release operator install \
+            -r https://github.com/tercen/fast_tSNE_operator \
+            -t 0.2.1 2>&1 | tee install-${{ matrix.token-mode }}.log
+
+      - name: Capture service logs
+        # BEFORE the assertions that grep them (PR#6 review lesson). The
+        # podman-init auth lines live in BOTH services' logs — they are the
+        # direct evidence the action input reached the containers' env.
+        if: always()
+        run: |
+          docker compose -f start-tercen/docker-compose.yml logs --no-color tercen > tercen-${{ matrix.token-mode }}.log || true
+          docker compose -f start-tercen/docker-compose.yml logs --no-color tercen-worker > worker-${{ matrix.token-mode }}.log || true
+          wc -l tercen-${{ matrix.token-mode }}.log worker-${{ matrix.token-mode }}.log
+
+      - name: Assert — every alternative must install green
+        run: |
+          grep -q '^state -- done$' install-${{ matrix.token-mode }}.log || {
+            echo "::error::install did not reach 'state -- done' under github-token=${{ matrix.token-mode }} — the input DID affect the install (contradicts the static analysis); investigate"
+            tail -5 install-${{ matrix.token-mode }}.log
+            exit 1
+          }
+
+      - name: Observation — bootstrap must be anonymous on every leg
+        run: |
+          # Fail closed: prove the launch line EXISTS before reading its
+          # absence (empty grep => vacuous pass => void leg, the PR#3 lesson).
+          line="$(grep -m1 'bootstrapRenv --' worker-${{ matrix.token-mode }}.log || true)"
+          echo "launch line: $line"
+          if [ -z "$line" ]; then
+            echo "::error::no 'bootstrapRenv --' launch line in the worker log under github-token=${{ matrix.token-mode }} — bootstrap never observed, cannot certify anonymity"
+            exit 1
+          fi
+          if echo "$line" | grep -q 'GITHUB_PAT='; then
+            echo "::error::GITHUB_PAT pair present on the launch line under github-token=${{ matrix.token-mode }} — the action input DID reach the bootstrap (contradicts the static analysis); investigate"
+            exit 1
+          fi
+          echo "confirmed: no GITHUB_PAT pair — bootstrap ran anonymous"
+
+      - name: Observation — podman-init consumed the input as expected
+        run: |
+          for svc in tercen tercen-worker; do
+            f="$svc-${{ matrix.token-mode }}.log"
+            if [ '${{ matrix.token-mode }}' = 'empty' ]; then
+              grep -q 'No GITHUB_TOKEN provided, skipping auth configuration' "$f" \
+                || { echo "::error::$svc log lacks the expected 'No GITHUB_TOKEN provided' line"; exit 1; }
+              echo "$svc: podman-init skipped auth (empty input)"
+            else
+              grep -q 'Created /root/.config/containers/auth.json' "$f" \
+                || { echo "::error::$svc log lacks the expected 'Created auth.json' line — input did not reach the container env"; exit 1; }
+              echo "$svc: podman-init created ghcr auth.json from the input"
+            fi
+          done
+          echo "=> the action github-token input feeds the ghcr registry credential ONLY; the renv bootstrap never sees it"
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: action-token-${{ matrix.token-mode }}
+          path: |
+            install-*.log
+            tercen-*.log
+            worker-*.log
