@@ -130,7 +130,13 @@ jobs:
 
       - name: Observation — podman-init consumed the input as expected
         run: |
-          for svc in tercen tercen-worker; do
+          # svc = the FILE prefix the Capture step writes (tercen-/worker-),
+          # NOT the compose service name — run 36198167374 failed all legs
+          # on a phantom tercen-worker-<leg>.log (grep exit 2 on a missing
+          # file after tercen had already passed). The six logs from that
+          # run carry the expected lines: auth.json created (valid+invalid,
+          # both services) / skip line (empty, both services).
+          for svc in tercen worker; do
             f="$svc-${{ matrix.token-mode }}.log"
             if [ '${{ matrix.token-mode }}' = 'empty' ]; then
               grep -q 'No GITHUB_TOKEN provided, skipping auth configuration' "$f" \
