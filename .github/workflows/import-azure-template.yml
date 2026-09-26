@@ -166,6 +166,10 @@ jobs:
               -f json -q > project-readback.log
           cat project-readback.log
           COMMIT_META="$(jq -r 'if type == "string" then . elif type == "array" and length == 1 and (.[0] | type == "string") then .[0] else "" end' project-readback.log 2>/dev/null || true)"
+          # run 36205578833: the engine JSON-encodes scalar results one
+          # EXTRA time — the sha arrives wrapped in quotes even after the
+          # -r decode above. Strip a surrounding pair, nothing else.
+          COMMIT_META="${COMMIT_META#\"}"; COMMIT_META="${COMMIT_META%\"}"
           if [ -z "$COMMIT_META" ] || [ "$COMMIT_META" = "null" ]; then
             echo "::error::GIT_COMMIT meta missing/empty on project $PROJECT_ID (or the readback query itself failed — output above)"; exit 1
           fi
