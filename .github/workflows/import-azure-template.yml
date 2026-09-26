@@ -179,6 +179,76 @@ jobs:
           fi
           echo "import complete: project pinned to the cloned revision"
 
+      - name: Assert — every workflow operator installed (docs + activity)
+        # 4th leg (customer report: operators not installing post-import).
+        # The import DOES auto-install each operator referenced by the
+        # template's workflows (git_project_runner: one createGitOperator
+        # per distinct non-native operatorRef; a failed install throws
+        # and fails the task) — but DoneState alone made that invisible.
+        # This leg verifies it independently, fail-closed on both levels:
+        #   A. DOC — every distinct non-empty operatorRef url.uri on the
+        #      project's saved workflows exists among the installed
+        #      operator docs (.operators[] | .url). Steps are EMBEDDED in
+        #      the Workflow doc (P4.a), so .steps[] reads them directly.
+        #   B. ACTIVITY — each such uri's repo base name has a final
+        #      install folder under /var/lib/tercen/data/operator with a
+        #      bootstrapRenv run in worker.log (the install physically
+        #      ran), and the distinct-folder count equals the distinct-
+        #      uri count — an operator referenced only inside a GroupStep
+        #      (top-level .steps[] misses it) surfaces as folder>uri.
+        # Same engine constraints as the GIT_COMMIT leg: tercenctl's jq
+        # is NOT full jq (iteration, select ==, field access only) and
+        # results are double-JSON-encoded — stream raw steps and shape
+        # them in the runner's real jq below.
+        shell: bash
+        run: |
+          set -euo pipefail
+          norm() { jq -c 'if type == "string" then fromjson else . end
+                         | if type == "array" then .[] else . end
+                         | if type == "string" then fromjson else . end'; }
+          docker run --net=host --rm \
+              -e TERCEN_USERNAME=test -e TERCEN_PASSWORD=test \
+              -e TERCEN_URI=http://172.42.0.42:5400 \
+              "tercen/tercenctl:$CTL_TAG" query jq \
+              -e '.workflows[] | select(.projectId == "'"$PROJECT_ID"'") | .steps[]' \
+              -f json -q 2> wf-steps.stderr.log > wf-steps.raw.log \
+            || { echo "::error::workflow steps query failed:"; cat wf-steps.raw.log wf-steps.stderr.log; exit 1; }
+          docker run --net=host --rm \
+              -e TERCEN_USERNAME=test -e TERCEN_PASSWORD=test \
+              -e TERCEN_URI=http://172.42.0.42:5400 \
+              "tercen/tercenctl:$CTL_TAG" query jq \
+              -e '.operators[] | .url' \
+              -f json -q 2> op-docs.stderr.log > op-docs.raw.log \
+            || { echo "::error::installed-operators query failed:"; cat op-docs.raw.log op-docs.stderr.log; exit 1; }
+
+          WF_URIS="$(norm < wf-steps.raw.log | jq -r 'try .model.operatorSettings.operatorRef.url.uri // empty' | grep -v '^$' | sort -u)"
+          OP_URIS="$(norm < op-docs.raw.log | jq -r 'try .uri // empty' | grep -v '^$' | sort -u)"
+          WF_COUNT="$(printf '%s\n' "$WF_URIS" | grep -c . || true)"
+          if [ "$WF_COUNT" -eq 0 ]; then
+            echo "::error::no operator refs found on project $PROJECT_ID workflows — the template must reference at least one operator"; exit 1
+          fi
+          echo "workflow operator uris ($WF_COUNT):"; printf '%s\n' "$WF_URIS"
+
+          for uri in $WF_URIS; do
+            if ! printf '%s\n' "$OP_URIS" | grep -Fxq "$uri"; then
+              echo "::error::operator doc MISSING for workflow ref: $uri"; exit 1
+            fi
+            base="${uri##*/}"; base="${base%.git}"
+            folder="$(grep -oE '/var/lib/tercen/data/operator/[0-9a-f]{2}/[0-9a-f]{2}/[0-9a-f-]{36}/[a-zA-Z0-9_.-]+' worker.log \
+                        | sed 's#.*/##' | sort -u | awk -v b="$base" 'index($0, "-" b "-") {print; exit}')"
+            if [ -z "$folder" ]; then
+              echo "::error::no install folder/bootstrapRenv in worker.log for: $base (uri $uri)"; exit 1
+            fi
+            echo "installed: $base -> $folder"
+          done
+
+          FOLDER_COUNT="$(grep -oE '/var/lib/tercen/data/operator/[0-9a-f]{2}/[0-9a-f]{2}/[0-9a-f-]{36}/[a-zA-Z0-9_.-]+' worker.log \
+                            | sed 's#.*/##' | sort -u | grep -c . || true)"
+          if [ "$FOLDER_COUNT" -ne "$WF_COUNT" ]; then
+            echo "::error::distinct install folders ($FOLDER_COUNT) != distinct workflow operator uris ($WF_COUNT) — hidden or extra installs"; exit 1
+          fi
+          echo "operator-install leg complete: $WF_COUNT/$WF_COUNT installed (doc + activity)"
+
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -189,5 +259,9 @@ jobs:
             git-pull.log
             docker-stderr.log
             project-readback.log
+            wf-steps.raw.log
+            wf-steps.stderr.log
+            op-docs.raw.log
+            op-docs.stderr.log
             tercen.log
             worker.log
