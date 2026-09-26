@@ -143,6 +143,11 @@ jobs:
         #   3. GIT_COMMIT meta on the project == that exact sha — proven by
         #      reading the project doc back (`query jq`), not by log lines;
         #      this is the write-back the UI's clone wizard depends on.
+        # The engine behind `query jq` is NOT full jq — run 36201680596:
+        # "Unknown function: first/0". Keep the -e expression to features
+        # in tercenctl's own examples (iteration, select ==, field access):
+        # stream the VALUE, no first()/[0]/[collect]. Shape-picking happens
+        # in the runner's real jq below.
         shell: bash
         run: |
           grep -q "Operation completed successfully" git-pull.log || {
@@ -157,12 +162,12 @@ jobs:
               -e TERCEN_PASSWORD=test \
               -e TERCEN_URI=http://172.42.0.42:5400 \
               "tercen/tercenctl:$CTL_TAG" query jq \
-              -e '.projects[] | select(.id == "'"$PROJECT_ID"'") | {id, commit: ([.meta[] | select(.key == "GIT_COMMIT") | .value] | first)}' \
+              -e '.projects[] | select(.id == "'"$PROJECT_ID"'") | .meta[] | select(.key == "GIT_COMMIT") | .value' \
               -f json -q > project-readback.log
           cat project-readback.log
-          COMMIT_META="$(jq -r '(try .commit catch null) // (try .[0].commit catch null) // (try .results[0].commit catch null) // empty' project-readback.log 2>/dev/null || true)"
+          COMMIT_META="$(jq -r 'if type == "string" then . elif type == "array" and length == 1 and (.[0] | type == "string") then .[0] else "" end' project-readback.log 2>/dev/null || true)"
           if [ -z "$COMMIT_META" ] || [ "$COMMIT_META" = "null" ]; then
-            echo "::error::GIT_COMMIT meta missing/empty on project $PROJECT_ID — worker reached done but the write-back is absent"; exit 1
+            echo "::error::GIT_COMMIT meta missing/empty on project $PROJECT_ID (or the readback query itself failed — output above)"; exit 1
           fi
           echo "project GIT_COMMIT: $COMMIT_META"
           if [ "$COMMIT_META" != "$CLONE_SHA" ]; then
