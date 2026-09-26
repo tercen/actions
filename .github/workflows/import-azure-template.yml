@@ -190,17 +190,23 @@ jobs:
         #      project's saved workflows exists among the installed
         #      operator docs (.operators[] | .url). Steps are EMBEDDED in
         #      the Workflow doc (P4.a), so .steps[] reads them directly.
-        #   B. ACTIVITY — install folders under /var/lib/tercen/data/
-        #      operator in worker.log must ALL belong to workflow refs
-        #      (no foreign installs), and at least one fresh install must
-        #      have happened. NOT every ref needs a folder:
-        #      basicCreateGitOperator dedupes via findInstalledOperator
-        #      (same url+version already present → reuse the doc, no
-        #      clone/bootstrapRenv) — the fresh stack ships core
-        #      operators pre-seeded, so a folder-less ref with a doc is
-        #      'reused, not freshly installed' (logged, not fatal).
-        #      First run of this leg (36214063266) caught exactly that:
-        #      9 refs, 6 fresh installs, 3 dedup-reused.
+        #   B. ACTIVITY — every ref must show install activity in
+        #      worker.log, in one of the two REAL install classes:
+        #      - git+renv (ROperator): final install folder under
+        #        /var/lib/tercen/data/operator/<xx>/<yy>/<uuid>/tercen-<base>-<sha>
+        #      - docker operator (repo properties declare 'container:'):
+        #        a 'Pulling <registry>/<base>:<tag> ...' TaskLogEvent
+        #        (operator_service.dart:981) — prebuilt image pull, NO
+        #        folder by design.
+        #      First run of this leg (36214063266) exposed exactly this
+        #      split: 9 refs = 6 renv installs + 3 docker pulls
+        #      (export_table -> ghcr.io:1.0.8, flowsom -> docker.io:1.6.0,
+        #      read_csv -> ghcr.io:a3e3c5f), and failed on a folder-only
+        #      check. 'Creating operator from <uri>@<version>'
+        #      (operator_service.dart:836) is logged unconditionally per
+        #      processed ref — a doc with NO folder, NO pull and NO
+        #      create-event is a silent skip → fail. Install folders must
+        #      all map back to workflow refs (foreign install → fail).
         # Same engine constraints as the GIT_COMMIT leg: tercenctl's jq
         # is NOT full jq (iteration, select ==, field access only) and
         # results are double-JSON-encoded — stream raw steps and shape
@@ -238,7 +244,7 @@ jobs:
           fi
           echo "workflow operator uris ($WF_COUNT):"; printf '%s\n' "$WF_URIS"
 
-          FRESH=0; REUSED=0
+          RENV=0; DOCKER=0; REUSED=0
           for uri in $WF_URIS; do
             if ! printf '%s\n' "$OP_URIS" | grep -Fxq "$uri"; then
               echo "::error::operator doc MISSING for workflow ref: $uri"; exit 1
@@ -246,21 +252,25 @@ jobs:
             base="${uri##*/}"; base="${base%.git}"
             folder="$(printf '%s\n' "$FOLDERS" | awk -v b="$base" 'index($0, "-" b "-") {print; exit}')"
             if [ -n "$folder" ]; then
-              echo "installed this run: $base -> $folder"; FRESH=$((FRESH+1))
+              echo "installed this run (git+renv): $base -> $folder"; RENV=$((RENV+1))
+            elif grep -q "Pulling .*${base}:" worker.log; then
+              echo "installed this run (docker image pull): $base"; DOCKER=$((DOCKER+1))
+            elif grep -qF "Creating operator from ${uri}@" worker.log; then
+              echo "present, no fresh install (existing doc reused): $base"; REUSED=$((REUSED+1))
             else
-              echo "present, no fresh install (dedup/pre-seeded): $base"; REUSED=$((REUSED+1))
+              echo "::error::operator doc exists but NO install activity for $base (uri $uri): no renv folder, no image pull, not even a create-event — silent skip"; exit 1
             fi
           done
 
-          if [ "$FRESH" -eq 0 ]; then
-            echo "::error::zero fresh installs on a brand-new stack — every ref deduped, which contradicts a fresh instance"; exit 1
+          if [ $((RENV+DOCKER)) -eq 0 ]; then
+            echo "::error::zero installs on a brand-new stack — every ref resolved to an existing doc, which contradicts a fresh instance"; exit 1
           fi
           for folder in $FOLDERS; do
             if ! printf '%s\n' "$WF_URIS" | sed 's#.*/##;s/\.git$//' | awk -v f="$folder" 'index(f, "-" $0 "-") {found=1} END {exit !found}'; then
               echo "::error::install folder with no workflow ref: $folder (foreign install)"; exit 1
             fi
           done
-          echo "operator-install leg complete: $WF_COUNT refs = $FRESH installed this run + $REUSED dedup-reused (all docs verified)"
+          echo "operator-install leg complete: $WF_COUNT refs = $RENV renv installs + $DOCKER docker pulls + $REUSED reused (all docs verified)"
 
       - name: Upload logs
         if: always()
