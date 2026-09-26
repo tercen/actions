@@ -1,0 +1,193 @@
+# Sartorius Azure template import leg — the customer's GitProjectTask flow
+# (wizard shape) against a FRESH instance, driven ENTIRELY by tercenctl:
+#   project create --gitUrl <azure repo>   (GIT_URL meta set at create —
+#     exactly what the UI wizard does; tercenctl >= 0.12.0)
+#   git pull (RESET_PULL GitProjectTask; GIT_PAT task meta is encrypted
+#     server-side) → DoneState → worker writes GIT_COMMIT back onto the
+#     project. The generated ops layer is QUIET: --wait prints only
+#     '✓ Operation completed successfully' — NO commit line (run
+#     36200062082), so the write-back is proven by reading the project
+#     doc back via `query jq` and matching it against the worker's
+#     'Git clone done : revision -- <sha>' TaskLogEvent.
+#
+# IMAGE TAG LESSON (run 36198962698 + probe): tercen/tercenctl:release is a
+# STALE hand-pushed tag (~Nov 2025) — it has NO `git` and NO `project`
+# command at all. Real images are the bare version tags published by the
+# tercenctl-v* release pipeline (.github/workflows/tercen-ctl.yml in sci).
+# Pin the explicit version; never :release. 0.12.0 = current (2026-09-21).
+#
+# The worker's Git wrapper embeds the token as URL userinfo `pat:<token>`
+# (sci_git.dart L15) — valid for Azure DevOps https clones (any username,
+# PAT as password). The clone runs with GIT_LFS_SKIP_SMUDGE=1 but
+# GitProjectHelper then fetches the repo's LFS TestData explicitly
+# (~14 min for this repo; run 36200062082).
+# ⚠ sci#1682 (fix PR #1683, rides next train): until it ships, the worker
+# FINE-logs the clone URL WITH the pat:<token> userinfo — the Capture step
+# redacts every ://user:secret@ shape before bytes hit disk and FAILS the
+# run if a token-shaped userinfo survives (run 36200062082 uploaded a raw
+# token this way; artifact deleted, token flagged for rotation).
+#
+# TOKEN AVAILABILITY: AZ_SRT_TOKEN reaches this repo (the 36198962698 guard
+# passed). It FAILS CLOSED with a length-only print; the run cannot
+# silently degrade to anonymous. The token value NEVER appears in logs:
+# passed via env into tercenctl only; GIT_PAT task meta is encrypted
+# server-side (task_service _ensureSecret strips it).
+name: import-azure-template
+
+on:
+  workflow_dispatch:
+    inputs:
+      tercen-tag:
+        description: 'tercen/tercen image tag to boot the fresh instance with'
+        required: false
+        default: '1.1.10'
+      ctl-tag:
+        description: 'tercen/tercenctl image tag (needs git + project create --gitUrl)'
+        required: false
+        default: '0.12.0'
+  push:
+    branches: [feature/azure-template-import]
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    env:
+      AZURE_REPO_URL: https://dev.azure.com/sartorius-lps/lps_ingenix_modules/_git/lps_tercen_phenotyping_template
+      CTL_TAG: ${{ github.event.inputs.ctl-tag || '0.12.0' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Guard — Azure PAT must be present (fail closed, length only)
+        env:
+          AZ_TOKEN_VALUE: ${{ secrets.AZ_SRT_TOKEN }}
+        run: |
+          if [ -z "$AZ_TOKEN_VALUE" ]; then
+            echo "::error::AZ_SRT_TOKEN is empty here — secret not available to tercen/actions. The import cannot run anonymous; fix the secret access first."
+            exit 1
+          fi
+          echo "AZ_SRT_TOKEN present (length $(printf %s "$AZ_TOKEN_VALUE" | wc -c))"
+
+      - name: Start fresh Tercen instance
+        uses: ./start-tercen
+        with:
+          branch: ${{ github.event.inputs.tercen-tag || '1.1.10' }}
+          sarno-tag: '1.2.5'
+
+      - name: Create project with GIT_URL meta (wizard shape)
+        # `tercenctl -f json -q` stdout is pure JSON — keep docker's
+        # image-pull chatter OUT of it: run 36199931509 had a SUCCESSFUL
+        # create (owner test + GIT_URL meta Pair in the response) fail the
+        # step because `2>&1 | tee` let the pull progress break the jq
+        # parse. stderr goes to its own artifact instead.
+        shell: bash
+        run: |
+          if ! docker run --net=host --rm \
+              -e TERCEN_USERNAME=test \
+              -e TERCEN_PASSWORD=test \
+              -e TERCEN_URI=http://172.42.0.42:5400 \
+              "tercen/tercenctl:$CTL_TAG" project create \
+              -n lps_tercen_phenotyping_template \
+              -u "$AZURE_REPO_URL" \
+              -f json -q > project-create.log 2> docker-stderr.log; then
+            echo "::error::tercenctl project create failed — stderr:"; cat docker-stderr.log
+            echo "— stdout:"; cat project-create.log
+            exit 1
+          fi
+          cat project-create.log
+          PROJECT_ID="$(jq -r '.id // .project.id // empty' project-create.log 2>/dev/null || true)"
+          if [ -z "$PROJECT_ID" ] || [ "$PROJECT_ID" = "null" ]; then
+            echo "::error::could not parse project id from create output:"; cat project-create.log; exit 1
+          fi
+          echo "project created: $PROJECT_ID"
+          echo "PROJECT_ID=$PROJECT_ID" >> "$GITHUB_ENV"
+
+      - name: Pull the template (RESET_PULL GitProjectTask)
+        shell: bash
+        env:
+          AZ_TOKEN_VALUE: ${{ secrets.AZ_SRT_TOKEN }}
+        run: |
+          docker run --net=host --rm \
+            -e TERCEN_USERNAME=test \
+            -e TERCEN_PASSWORD=test \
+            -e TERCEN_URI=http://172.42.0.42:5400 \
+            "tercen/tercenctl:$CTL_TAG" git pull \
+            -p "$PROJECT_ID" \
+            --token "$AZ_TOKEN_VALUE" \
+            --branch main --wait 2>&1 | tee git-pull.log
+
+      - name: Capture service logs (redacted; runs before the assert needs worker.log)
+        # sci#1682: the worker FINE-logs the clone URL with pat:<token>
+        # userinfo. Redact ANY ://user:secret@ shape BEFORE bytes hit disk
+        # (keeps the username for debugging), then guard the RESULT: a
+        # surviving token-shaped userinfo fails the run — never upload it.
+        if: always()
+        run: |
+          docker compose -f start-tercen/docker-compose.yml logs --no-color tercen 2>/dev/null \
+            | sed -E 's#(://[^/@: ]+:)[^@/ ]+@#\1***@#g' > tercen.log || true
+          docker compose -f start-tercen/docker-compose.yml logs --no-color tercen-worker 2>/dev/null \
+            | sed -E 's#(://[^/@: ]+:)[^@/ ]+@#\1***@#g' > worker.log || true
+          if grep -nE '://(pat|x-access-token|oauth2|token):[^@/* ]+@' tercen.log worker.log; then
+            echo "::error::credential-shaped userinfo survived redaction — refusing to upload"; exit 1
+          fi
+          wc -l tercen.log worker.log
+
+      - name: Assert — DoneState + GIT_COMMIT written back
+        # The generated ops layer is QUIET: --wait prints only
+        # '✓ Operation completed successfully' — no 'Current commit:' line
+        # (run 36200062082 burned on that stale assumption). Three legs,
+        # all fail-closed:
+        #   1. tercenctl saw the operation complete (git-pull.log)
+        #   2. the worker cloned: 'Git clone done : revision -- <sha>'
+        #      TaskLogEvent is in worker.log (FINEST, captured in run
+        #      36200062082)
+        #   3. GIT_COMMIT meta on the project == that exact sha — proven by
+        #      reading the project doc back (`query jq`), not by log lines;
+        #      this is the write-back the UI's clone wizard depends on.
+        # The engine behind `query jq` is NOT full jq — run 36201680596:
+        # "Unknown function: first/0". Keep the -e expression to features
+        # in tercenctl's own examples (iteration, select ==, field access):
+        # stream the VALUE, no first()/[0]/[collect]. Shape-picking happens
+        # in the runner's real jq below.
+        shell: bash
+        run: |
+          grep -q "Operation completed successfully" git-pull.log || {
+            echo "::error::git pull did not report success (generated layer prints '✓ Operation completed successfully')"; tail -5 git-pull.log; exit 1; }
+          CLONE_SHA="$(grep -oE 'revision -- [0-9a-f]{40}' worker.log | head -1 | awk '{print $3}')"
+          if [ -z "$CLONE_SHA" ]; then
+            echo "::error::no 'Git clone done : revision -- <sha>' event in worker.log — clone never ran or log capture failed"; exit 1
+          fi
+          echo "clone revision: $CLONE_SHA"
+          docker run --net=host --rm \
+              -e TERCEN_USERNAME=test \
+              -e TERCEN_PASSWORD=test \
+              -e TERCEN_URI=http://172.42.0.42:5400 \
+              "tercen/tercenctl:$CTL_TAG" query jq \
+              -e '.projects[] | select(.id == "'"$PROJECT_ID"'") | .meta[] | select(.key == "GIT_COMMIT") | .value' \
+              -f json -q > project-readback.log
+          cat project-readback.log
+          COMMIT_META="$(jq -r 'if type == "string" then . elif type == "array" and length == 1 and (.[0] | type == "string") then .[0] else "" end' project-readback.log 2>/dev/null || true)"
+          # run 36205578833: the engine JSON-encodes scalar results one
+          # EXTRA time — the sha arrives wrapped in quotes even after the
+          # -r decode above. Strip a surrounding pair, nothing else.
+          COMMIT_META="${COMMIT_META#\"}"; COMMIT_META="${COMMIT_META%\"}"
+          if [ -z "$COMMIT_META" ] || [ "$COMMIT_META" = "null" ]; then
+            echo "::error::GIT_COMMIT meta missing/empty on project $PROJECT_ID (or the readback query itself failed — output above)"; exit 1
+          fi
+          echo "project GIT_COMMIT: $COMMIT_META"
+          if [ "$COMMIT_META" != "$CLONE_SHA" ]; then
+            echo "::error::GIT_COMMIT ($COMMIT_META) != clone revision ($CLONE_SHA)"; exit 1
+          fi
+          echo "import complete: project pinned to the cloned revision"
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: azure-import-logs
+          path: |
+            project-create.log
+            git-pull.log
+            docker-stderr.log
+            project-readback.log
+            tercen.log
+            worker.log
