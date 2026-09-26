@@ -181,7 +181,7 @@ jobs:
 
       - name: Assert — every workflow operator installed (docs + activity)
         # 4th leg (customer report: operators not installing post-import).
-        # The import DOES auto-install each operator referenced by the
+        # The import auto-installs each operator referenced by the
         # template's workflows (git_project_runner: one createGitOperator
         # per distinct non-native operatorRef; a failed install throws
         # and fails the task) — but DoneState alone made that invisible.
@@ -190,12 +190,17 @@ jobs:
         #      project's saved workflows exists among the installed
         #      operator docs (.operators[] | .url). Steps are EMBEDDED in
         #      the Workflow doc (P4.a), so .steps[] reads them directly.
-        #   B. ACTIVITY — each such uri's repo base name has a final
-        #      install folder under /var/lib/tercen/data/operator with a
-        #      bootstrapRenv run in worker.log (the install physically
-        #      ran), and the distinct-folder count equals the distinct-
-        #      uri count — an operator referenced only inside a GroupStep
-        #      (top-level .steps[] misses it) surfaces as folder>uri.
+        #   B. ACTIVITY — install folders under /var/lib/tercen/data/
+        #      operator in worker.log must ALL belong to workflow refs
+        #      (no foreign installs), and at least one fresh install must
+        #      have happened. NOT every ref needs a folder:
+        #      basicCreateGitOperator dedupes via findInstalledOperator
+        #      (same url+version already present → reuse the doc, no
+        #      clone/bootstrapRenv) — the fresh stack ships core
+        #      operators pre-seeded, so a folder-less ref with a doc is
+        #      'reused, not freshly installed' (logged, not fatal).
+        #      First run of this leg (36214063266) caught exactly that:
+        #      9 refs, 6 fresh installs, 3 dedup-reused.
         # Same engine constraints as the GIT_COMMIT leg: tercenctl's jq
         # is NOT full jq (iteration, select ==, field access only) and
         # results are double-JSON-encoded — stream raw steps and shape
@@ -221,33 +226,41 @@ jobs:
               -f json -q 2> op-docs.stderr.log > op-docs.raw.log \
             || { echo "::error::installed-operators query failed:"; cat op-docs.raw.log op-docs.stderr.log; exit 1; }
 
-          WF_URIS="$(norm < wf-steps.raw.log | jq -r 'try .model.operatorSettings.operatorRef.url.uri // empty' | grep -v '^$' | sort -u)"
-          OP_URIS="$(norm < op-docs.raw.log | jq -r 'try .uri // empty' | grep -v '^$' | sort -u)"
+          WF_URIS="$( (norm < wf-steps.raw.log | jq -r 'try .model.operatorSettings.operatorRef.url.uri // empty' | grep -v '^$' | sort -u) || true )"
+          OP_URIS="$( (norm < op-docs.raw.log | jq -r 'try .uri // empty' | grep -v '^$' | sort -u) || true )"
+          # ( ... || true ) — pipefail must not abort before the friendly
+          # zero-refs error below can fire on an empty result.
+          FOLDERS="$( (grep -oE '/var/lib/tercen/data/operator/[0-9a-f]{2}/[0-9a-f]{2}/[0-9a-f-]{36}/[a-zA-Z0-9_.-]+' worker.log \
+                      | sed 's#.*/##' | sort -u) || true )"
           WF_COUNT="$(printf '%s\n' "$WF_URIS" | grep -c . || true)"
           if [ "$WF_COUNT" -eq 0 ]; then
             echo "::error::no operator refs found on project $PROJECT_ID workflows — the template must reference at least one operator"; exit 1
           fi
           echo "workflow operator uris ($WF_COUNT):"; printf '%s\n' "$WF_URIS"
 
+          FRESH=0; REUSED=0
           for uri in $WF_URIS; do
             if ! printf '%s\n' "$OP_URIS" | grep -Fxq "$uri"; then
               echo "::error::operator doc MISSING for workflow ref: $uri"; exit 1
             fi
             base="${uri##*/}"; base="${base%.git}"
-            folder="$(grep -oE '/var/lib/tercen/data/operator/[0-9a-f]{2}/[0-9a-f]{2}/[0-9a-f-]{36}/[a-zA-Z0-9_.-]+' worker.log \
-                        | sed 's#.*/##' | sort -u | awk -v b="$base" 'index($0, "-" b "-") {print; exit}')"
-            if [ -z "$folder" ]; then
-              echo "::error::no install folder/bootstrapRenv in worker.log for: $base (uri $uri)"; exit 1
+            folder="$(printf '%s\n' "$FOLDERS" | awk -v b="$base" 'index($0, "-" b "-") {print; exit}')"
+            if [ -n "$folder" ]; then
+              echo "installed this run: $base -> $folder"; FRESH=$((FRESH+1))
+            else
+              echo "present, no fresh install (dedup/pre-seeded): $base"; REUSED=$((REUSED+1))
             fi
-            echo "installed: $base -> $folder"
           done
 
-          FOLDER_COUNT="$(grep -oE '/var/lib/tercen/data/operator/[0-9a-f]{2}/[0-9a-f]{2}/[0-9a-f-]{36}/[a-zA-Z0-9_.-]+' worker.log \
-                            | sed 's#.*/##' | sort -u | grep -c . || true)"
-          if [ "$FOLDER_COUNT" -ne "$WF_COUNT" ]; then
-            echo "::error::distinct install folders ($FOLDER_COUNT) != distinct workflow operator uris ($WF_COUNT) — hidden or extra installs"; exit 1
+          if [ "$FRESH" -eq 0 ]; then
+            echo "::error::zero fresh installs on a brand-new stack — every ref deduped, which contradicts a fresh instance"; exit 1
           fi
-          echo "operator-install leg complete: $WF_COUNT/$WF_COUNT installed (doc + activity)"
+          for folder in $FOLDERS; do
+            if ! printf '%s\n' "$WF_URIS" | sed 's#.*/##;s/\.git$//' | awk -v f="$folder" 'index(f, "-" $0 "-") {found=1} END {exit !found}'; then
+              echo "::error::install folder with no workflow ref: $folder (foreign install)"; exit 1
+            fi
+          done
+          echo "operator-install leg complete: $WF_COUNT refs = $FRESH installed this run + $REUSED dedup-reused (all docs verified)"
 
       - name: Upload logs
         if: always()
